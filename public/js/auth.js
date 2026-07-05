@@ -62,8 +62,8 @@ async function handleRegister(e) {
   const btn = document.getElementById('register-btn');
   const errorEl = document.getElementById('register-error');
 
-  if (!username || !email || !password || !confirm) {
-    errorEl.textContent = '请填写所有字段';
+  if (!username || !password || !confirm) {
+    errorEl.textContent = '请填写用户名、密码和确认密码';
     return;
   }
 

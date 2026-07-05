@@ -140,7 +140,7 @@ function closeSidebar() { if (window.innerWidth <= 768) { document.getElementByI
 // ========== Room Management ==========
 async function loadRooms() {
   try {
-    const res = await fetch(`${API}/api/rooms`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const res = await fetch(`${API}/api/rooms/all`, { headers: { 'Authorization': `Bearer ${state.token}` } });
     const data = await res.json();
     state.rooms = data.rooms || [];
     renderRooms();
@@ -158,10 +158,14 @@ function renderRooms() {
   const colors = ['#4f46e5','#0891b2','#059669','#d97706','#dc2626','#7c3aed','#db2777','#2563eb'];
   container.innerHTML = filtered.map(room => {
     const active = state.currentRoom?.id === room.id;
+    const isJoined = room.is_joined || state.isAdmin;
     const isRoomAdmin = room.is_room_admin || room.created_by === state.user.id;
+    const lockIcon = room.has_password ? '🔒' : '';
+    const adminBadge = isRoomAdmin ? '<span class="room-admin-badge">管</span>' : '';
+    const joinBadge = !isJoined ? '<span class="badge-join">未加入</span>' : '';
     return `<div class="room-item${active?' active':''}" onclick="switchRoom(${room.id})">
       <div class="room-avatar" style="background:${colors[room.id%colors.length]}">${room.name.charAt(0).toUpperCase()}</div>
-      <div class="room-info"><div class="room-name">${esc(room.name)} ${room.has_password ? '🔒' : ''} ${isRoomAdmin ? '<span class="room-admin-badge">管</span>' : ''}</div>
+      <div class="room-info"><div class="room-name">${esc(room.name)} ${lockIcon} ${adminBadge} ${joinBadge}</div>
         <div class="room-last-msg">${room.last_message_user?`${esc(room.last_message_user)}: ${esc(room.last_message||'')}`:'暂无消息'}</div></div>
       <div class="room-meta"><div class="room-member-count">${room.member_count || 0} 人</div></div>
     </div>`;
@@ -177,7 +181,7 @@ async function switchRoom(roomId, password = '') {
   if (!room) return;
 
   // Check password-protected room
-  if (room.has_password && !room.is_room_admin && !state.isAdmin && !password) {
+  if (room.has_password && !room.is_joined && !state.isAdmin && !password) {
     state.pendingRoomPassword = roomId;
     document.getElementById('roomPasswordLabel').textContent = `房间 "${esc(room.name)}" 需要密码`;
     document.getElementById('roomPasswordInput').value = '';
@@ -909,6 +913,114 @@ document.getElementById('messagesList')?.addEventListener('scroll', function() {
   }
 });
 
+// ========== Friends ==========
+
+async function loadFriends() {
+  try {
+    const res = await fetch(`${API}/api/friends`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    renderFriends(data.friends || []);
+    const reqRes = await fetch(`${API}/api/friends/requests`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const reqData = await reqRes.json();
+    renderFriendRequests(reqData.requests || []);
+  } catch(e) { console.error(e); }
+}
+
+function renderFriends(friends) {
+  const container = document.getElementById('friendsList');
+  if (!friends.length) {
+    container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--gray-400);font-size:12px;">暂无好友，点击上方 + 添加</div>';
+    return;
+  }
+  container.innerHTML = friends.map(f => `
+    <div class="friend-item">
+      <div class="friend-avatar" style="background:${f.avatar_color||'#4f46e5'}">${(f.display_name||f.username).charAt(0).toUpperCase()}</div>
+      <div class="friend-info">
+        <span class="friend-name">${esc(f.display_name||f.username)}${f.role==='admin'?' <span class="admin-badge" style="font-size:10px">管理</span>':''}</span>
+        <span class="friend-status${f.online?' online':''}">${f.online?'在线':'离线'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderFriendRequests(requests) {
+  const container = document.getElementById('friendRequests');
+  if (!requests.length) { container.style.display = 'none'; return; }
+  container.style.display = 'block';
+  container.innerHTML = `<div class="friends-header" style="color:var(--warning);">好友请求 (${requests.length})</div>
+    ${requests.map(r => `
+      <div class="friend-request-item">
+        <div class="friend-avatar" style="background:${r.avatar_color||'#4f46e5'};width:28px;height:28px;font-size:12px;">${r.username.charAt(0).toUpperCase()}</div>
+        <span class="friend-name">${esc(r.username)}</span>
+        <button class="btn btn-primary btn-sm" onclick="acceptFriendRequest(${r.id})">接受</button>
+        <button class="btn btn-secondary btn-sm" onclick="rejectFriendRequest(${r.id})">拒绝</button>
+      </div>
+    `).join('')}`;
+}
+
+function showAddFriend() {
+  document.getElementById('addFriendModal').classList.add('show');
+  document.getElementById('friendSearchInput').value = '';
+  document.getElementById('friendSearchResults').innerHTML = '';
+  document.getElementById('friendError').textContent = '';
+  document.getElementById('friendSearchInput').focus();
+}
+
+function closeAddFriendModal() {
+  document.getElementById('addFriendModal').classList.remove('show');
+}
+
+async function searchUsersForFriend(q) {
+  const results = document.getElementById('friendSearchResults');
+  if (q.length < 2) { results.innerHTML = ''; return; }
+  try {
+    const res = await fetch(`${API}/api/users/search?q=${encodeURIComponent(q)}`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    const users = (data.users || []).filter(u => u.id !== state.user.id);
+    if (!users.length) { results.innerHTML = '<div style="color:var(--gray-400);font-size:13px;padding:8px;">未找到用户</div>'; return; }
+    results.innerHTML = users.map(u => `
+      <div class="friend-search-item">
+        <div class="friend-avatar" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
+        <span class="friend-name">${esc(u.display_name||u.username)}</span>
+        <button class="btn btn-primary btn-sm" onclick="sendFriendRequest(${u.id})">添加</button>
+      </div>
+    `).join('');
+  } catch(e) { results.innerHTML = ''; }
+}
+
+async function sendFriendRequest(friendId) {
+  try {
+    const res = await fetch(`${API}/api/friends/request`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ friendId })
+    });
+    if (!res.ok) { const d = await res.json(); document.getElementById('friendError').textContent = d.error; return; }
+    showToast('好友申请已发送', 'success');
+    document.getElementById('friendSearchResults').innerHTML = '';
+  } catch(e) { showToast('操作失败', 'error'); }
+}
+
+async function acceptFriendRequest(requestId) {
+  try {
+    await fetch(`${API}/api/friends/accept`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ requestId })
+    });
+    loadFriends();
+    showToast('已接受好友申请', 'success');
+  } catch(e) { showToast('操作失败', 'error'); }
+}
+
+async function rejectFriendRequest(requestId) {
+  try {
+    await fetch(`${API}/api/friends/reject`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ requestId })
+    });
+    loadFriends();
+  } catch(e) { showToast('操作失败', 'error'); }
+}
+
 // ========== Init ==========
 async function initPage() {
   const avatar = document.getElementById('userAvatar');
@@ -920,6 +1032,7 @@ async function initPage() {
   }
   await checkAdminStatus();
   connectSocket();
+  loadFriends();
   showActiveAnnouncements();
 }
 

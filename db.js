@@ -231,6 +231,18 @@ async function createTables() {
 
     CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at);
 
+    CREATE TABLE IF NOT EXISTS friends (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status VARCHAR(20) DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, friend_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status);
+
     CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
     CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
@@ -314,12 +326,23 @@ function createTablesSQLite() {
       created_at DATETIME DEFAULT (datetime('now','localtime')),
       updated_at DATETIME DEFAULT (datetime('now','localtime'))
     );
+    CREATE TABLE IF NOT EXISTS friends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT (datetime('now','localtime')),
+      updated_at DATETIME DEFAULT (datetime('now','localtime')),
+      UNIQUE(user_id, friend_id)
+    );
   `);
   try { L.run("CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id,created_at)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_muted_users ON muted_users(user_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_login_history ON login_history(user_id)"); }catch(e){}
+  try { L.run("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)"); }catch(e){}
+  try { L.run("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)"); }catch(e){}
   ensureDefaultRoomsSQLite();
 }
@@ -371,6 +394,17 @@ async function runMigrations() {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
     await execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)");
+    await execute(`CREATE TABLE IF NOT EXISTS friends (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status VARCHAR(20) DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, friend_id)
+    )`);
+    await execute("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)");
+    await execute("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)");
   } else {
     const msgCols = db.all("PRAGMA table_info(messages)");
     const hasMsgType = msgCols.some(c => c.name === 'type');
@@ -408,17 +442,29 @@ async function runMigrations() {
       )`);
       db.run("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)");
     }
+
+    const friendsExists = db.all("SELECT name FROM sqlite_master WHERE type='table' AND name='friends'");
+    if (!friendsExists.length) {
+      db.run(`CREATE TABLE friends (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'pending',
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        updated_at DATETIME DEFAULT (datetime('now','localtime')),
+        UNIQUE(user_id, friend_id)
+      )`);
+      db.run("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)");
+      db.run("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)");
+    }
   }
 
-  // Ensure at least one admin exists (promote earliest user if needed)
+  // Ensure earliest user is always admin and ultimate admin (cannot be demoted)
   try {
-    const adminCount = await queryOne("SELECT COUNT(*) as cnt FROM users WHERE role='admin'");
-    if (!adminCount || Number(adminCount.cnt) === 0) {
-      const firstUser = await queryOne('SELECT id FROM users ORDER BY created_at ASC LIMIT 1');
-      if (firstUser) {
-        await execute('UPDATE users SET role=$1, is_ultimate_admin=1 WHERE id=$2', ['admin', firstUser.id]);
-        console.log('👑 Migrated earliest user to admin');
-      }
+    const firstUser = await queryOne('SELECT id FROM users ORDER BY created_at ASC LIMIT 1');
+    if (firstUser) {
+      await execute('UPDATE users SET role=$1, is_ultimate_admin=1 WHERE id=$2', ['admin', firstUser.id]);
+      console.log('👑 Ensured earliest user is admin/ultimate admin');
     }
   } catch (e) {
     console.warn('⚠️ Admin migration failed:', e.message);
@@ -557,14 +603,20 @@ async function getUserRooms(userId) {
     ORDER BY rm.joined_at DESC`, [userId]);
 }
 
-async function getAllRooms() {
+async function getAllRooms(userId = null) {
+  const userJoin = userId ? `EXISTS (SELECT 1 FROM room_members rm WHERE rm.room_id=r.id AND rm.user_id=${userId})` : '0';
+  const userAdmin = userId ? `EXISTS (SELECT 1 FROM room_members rm WHERE rm.room_id=r.id AND rm.user_id=${userId} AND rm.is_admin=1)` : '0';
   if (isPostgres) {
     return await query(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
       CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
+      ${userJoin} as is_joined,
+      ${userAdmin} as is_room_admin,
       (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
   }
   return db.all(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
     CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
+    ${userJoin} as is_joined,
+    ${userAdmin} as is_room_admin,
     (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
 }
 
@@ -797,6 +849,67 @@ async function setUserRole(userId, role) {
   await execute('UPDATE users SET role=$1 WHERE id=$2', [role, userId]);
 }
 
+// ========== Friends ==========
+async function sendFriendRequest(userId, friendId) {
+  if (userId === friendId) throw new Error('不能添加自己为好友');
+  const friend = await getUserById(friendId);
+  if (!friend) throw new Error('用户不存在');
+  // Check if request already exists either direction
+  const existing = await queryOne('SELECT status FROM friends WHERE (user_id=$1 AND friend_id=$2) OR (user_id=$2 AND friend_id=$1)', [userId, friendId]);
+  if (existing) {
+    if (existing.status === 'accepted') throw new Error('已经是好友');
+    if (existing.status === 'pending') throw new Error('好友申请已发送');
+  }
+  if (isPostgres) {
+    await execute('INSERT INTO friends (user_id, friend_id, status) VALUES ($1,$2,$3)', [userId, friendId, 'pending']);
+  } else {
+    db.run("INSERT INTO friends (user_id, friend_id, status) VALUES (?,?,?)", [userId, friendId, 'pending']);
+  }
+  return friend;
+}
+
+async function acceptFriendRequest(userId, requestId) {
+  const req = await queryOne('SELECT * FROM friends WHERE id=$1 AND friend_id=$2 AND status=$3', [requestId, userId, 'pending']);
+  if (!req) throw new Error('好友申请不存在');
+  const friendId = req.user_id;
+  if (isPostgres) {
+    await execute('UPDATE friends SET status=$1, updated_at=NOW() WHERE id=$2', ['accepted', requestId]);
+  } else {
+    await execute("UPDATE friends SET status=$1, updated_at=datetime('now','localtime') WHERE id=$2", ['accepted', requestId]);
+  }
+  // Create reciprocal accepted record
+  try {
+    await execute('INSERT INTO friends (user_id, friend_id, status) VALUES ($1,$2,$3)', [userId, friendId, 'accepted']);
+  } catch (e) {
+    // ignore duplicate
+  }
+  return await getUserById(friendId);
+}
+
+async function rejectFriendRequest(userId, requestId) {
+  const req = await queryOne('SELECT * FROM friends WHERE id=$1 AND friend_id=$2 AND status=$3', [requestId, userId, 'pending']);
+  if (!req) throw new Error('好友申请不存在');
+  await execute('DELETE FROM friends WHERE id=$1', [requestId]);
+}
+
+async function getFriendRequests(userId) {
+  return await query(`
+    SELECT f.*, u.username, u.display_name, u.avatar_color, u.last_seen
+    FROM friends f JOIN users u ON u.id=f.user_id
+    WHERE f.friend_id=$1 AND f.status='pending' ORDER BY f.created_at DESC`, [userId]);
+}
+
+async function getFriends(userId) {
+  return await query(`
+    SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen, u.role
+    FROM friends f JOIN users u ON u.id=f.friend_id
+    WHERE f.user_id=$1 AND f.status='accepted' ORDER BY u.username ASC`, [userId]);
+}
+
+async function removeFriend(userId, friendId) {
+  await execute('DELETE FROM friends WHERE (user_id=$1 AND friend_id=$2) OR (user_id=$2 AND friend_id=$1)', [userId, friendId]);
+}
+
 // ========== IP Geolocation ==========
 async function lookupIP(ip) {
   // Local / private IPs
@@ -868,5 +981,11 @@ module.exports = {
   setAnnouncementActive,
   isUltimateAdmin,
   setUserRole,
+  sendFriendRequest,
+  acceptFriendRequest,
+  rejectFriendRequest,
+  getFriendRequests,
+  getFriends,
+  removeFriend,
   lookupIP,
 };

@@ -42,6 +42,16 @@
         </div>
         <div class="rooms-list" id="roomsList"><div class="loading-spinner"></div></div>
       </div>
+      <div class="sidebar-friends">
+        <div class="friends-header">
+          <span>好友</span>
+          <button class="btn-icon" onclick="showAddFriend()" title="添加好友">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div class="friends-list" id="friendsList"><div class="loading-spinner"></div></div>
+        <div class="friend-requests" id="friendRequests" style="display:none"></div>
+      </div>
     </aside>
 
     <!-- Main Content -->
@@ -239,6 +249,22 @@
         <div class="form-group"><label>内容</label><textarea id="editAnnouncementContent" rows="4" maxlength="1000"></textarea></div>
       </div>
       <div class="modal-footer"><button class="btn btn-secondary" onclick="closeEditAnnouncementModal()">取消</button><button class="btn btn-primary" onclick="saveAnnouncement()">保存</button></div>
+    </div>
+  </div>
+
+  <!-- Add Friend Modal -->
+  <div class="modal-overlay" id="addFriendModal" onclick="closeModal(event)">
+    <div class="modal modal-sm" onclick="event.stopPropagation()">
+      <div class="modal-header"><h3>添加好友</h3><button class="btn-icon" onclick="closeAddFriendModal()">&times;</button></div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>搜索用户名</label>
+          <input type="text" id="friendSearchInput" placeholder="输入用户名搜索" oninput="searchUsersForFriend(this.value)">
+        </div>
+        <div class="friend-search-results" id="friendSearchResults"></div>
+        <p class="auth-error" id="friendError"></p>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="closeAddFriendModal()">关闭</button></div>
     </div>
   </div>
 

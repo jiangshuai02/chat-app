@@ -76,11 +76,13 @@ async function requireAdmin(req, res, next) {
 // Auth Routes
 app.post('/api/register', async (req, res) => {
   try {
-    const { username, email, password } = req.body;
-    if (!username || !email || !password) return res.status(400).json({ error: '请填写所有必填字段' });
+    const { username, password } = req.body;
+    let { email } = req.body;
+    if (!username || !password) return res.status(400).json({ error: '请填写用户名和密码' });
     if (username.length < 2 || username.length > 20) return res.status(400).json({ error: '用户名长度为2-20个字符' });
     if (password.length < 6) return res.status(400).json({ error: '密码至少6个字符' });
-    if (!email.includes('@')) return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    if (email && !email.includes('@')) return res.status(400).json({ error: '请输入有效的邮箱地址' });
+    if (!email) email = `${username}@chatapp.local`; // auto-generate if not provided
 
     const ip = getClientIp(req);
     const location = await db.lookupIP(ip);
@@ -147,7 +149,7 @@ app.get('/api/rooms', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/rooms/all', authenticateToken, async (req, res) => {
-  try { const rooms = await db.getAllRooms(); res.json({ rooms }); }
+  try { const rooms = await db.getAllRooms(req.user.id); res.json({ rooms }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -199,6 +201,47 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
     if (query.length < 1) return res.json({ users: [] });
     const users = await db.searchUsers(query, req.user.id);
     res.json({ users });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Friend Routes
+app.get('/api/friends', authenticateToken, async (req, res) => {
+  try { res.json({ friends: await db.getFriends(req.user.id) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/friends/requests', authenticateToken, async (req, res) => {
+  try { res.json({ requests: await db.getFriendRequests(req.user.id) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/friends/request', authenticateToken, async (req, res) => {
+  try {
+    const { friendId } = req.body;
+    if (!friendId) return res.status(400).json({ error: '请选择要添加的用户' });
+    const friend = await db.sendFriendRequest(req.user.id, parseInt(friendId));
+    res.json({ success: true, friend });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/friends/requests/:id/accept', authenticateToken, async (req, res) => {
+  try {
+    const friend = await db.acceptFriendRequest(req.user.id, parseInt(req.params.id));
+    res.json({ success: true, friend });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/friends/requests/:id/reject', authenticateToken, async (req, res) => {
+  try {
+    await db.rejectFriendRequest(req.user.id, parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/friends/:id', authenticateToken, async (req, res) => {
+  try {
+    await db.removeFriend(req.user.id, parseInt(req.params.id));
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -373,6 +416,69 @@ app.post('/api/admin/users/:id/role', authenticateToken, requireAdmin, async (re
     await db.setUserRole(userId, role);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== Friends API ==========
+
+// Search users
+app.get('/api/users/search', authenticateToken, async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    if (q.length < 1) return res.json({ users: [] });
+    const users = await db.searchUsers(q, req.user.id);
+    res.json({ users });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Send friend request
+app.post('/api/friends/request', authenticateToken, async (req, res) => {
+  try {
+    const { friendId } = req.body;
+    const friend = await db.sendFriendRequest(req.user.id, friendId);
+    res.json({ success: true, friend });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Accept friend request
+app.post('/api/friends/accept', authenticateToken, async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    const friend = await db.acceptFriendRequest(req.user.id, requestId);
+    res.json({ success: true, friend });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Reject friend request
+app.post('/api/friends/reject', authenticateToken, async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    await db.rejectFriendRequest(req.user.id, requestId);
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Get friend requests
+app.get('/api/friends/requests', authenticateToken, async (req, res) => {
+  try {
+    const requests = await db.getFriendRequests(req.user.id);
+    res.json({ requests });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get friends list
+app.get('/api/friends', authenticateToken, async (req, res) => {
+  try {
+    const friends = await db.getFriends(req.user.id);
+    res.json({ friends });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Remove friend
+app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
+  try {
+    await db.removeFriend(req.user.id, parseInt(req.params.friendId));
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ========== Socket.IO ==========
