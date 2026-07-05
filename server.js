@@ -471,8 +471,14 @@ app.post('/api/private-messages', authenticateToken, async (req, res) => {
     const message = await db.sendPrivateMessage(req.user.id, parseInt(receiverId), content || '', type || 'text', fileUrl || '');
     // Emit to recipient and sender
     const sender = await db.getUserById(req.user.id);
-    io.to(`user:${receiverId}`).emit('private:new', { ...message, senderName: sender.username, senderAvatar: sender.avatar_color });
-    io.to(`user:${req.user.id}`).emit('private:new', { ...message, senderName: sender.username, senderAvatar: sender.avatar_color });
+    const payload = {
+      ...message,
+      sender_username: sender.username,
+      sender_display_name: sender.display_name,
+      sender_avatar_color: sender.avatar_color
+    };
+    io.to(`user:${receiverId}`).emit('private:new', payload);
+    io.to(`user:${req.user.id}`).emit('private:new', payload);
     res.json({ message });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });

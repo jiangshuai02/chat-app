@@ -1511,8 +1511,8 @@ function appendPrivateMessage(msg) {
 
 function appendPrivateMessageToContainer(container, msg) {
   const own = Number(msg.sender_id) === Number(state.user.id);
-  const username = own ? (state.user.display_name || state.user.username) : (msg.sender_display_name || msg.sender_username || 'Unknown');
-  const avatarColor = own ? (state.user.avatar_color || '#4f46e5') : (msg.sender_avatar_color || '#4f46e5');
+  const username = own ? (state.user.display_name || state.user.username) : (msg.sender_display_name || msg.sender_username || msg.display_name || msg.username || 'Unknown');
+  const avatarColor = own ? (state.user.avatar_color || '#4f46e5') : (msg.sender_avatar_color || msg.avatar_color || '#4f46e5');
   const time = formatTime(msg.created_at);
   const div = document.createElement('div');
   div.className = `message${own?' own':''}${msg.is_recalled?' recalled':''}`;
