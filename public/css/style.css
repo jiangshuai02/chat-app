@@ -789,16 +789,13 @@ a {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
+  font-size: 22px;
+  line-height: 1;
 }
 
 .emoji-btn:hover {
   background: var(--gray-100);
   color: var(--gray-700) !important;
-}
-
-.emoji-btn svg {
-  display: block;
-  color: var(--gray-500);
 }
 
 .image-upload-btn {
@@ -1013,6 +1010,20 @@ a {
 }
 
 /* ========== Responsive Design ========== */
+html {
+  height: -webkit-fill-available;
+}
+
+body {
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+}
+
+#app {
+  height: 100vh;
+  height: -webkit-fill-available;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
@@ -1073,11 +1084,26 @@ a {
   .input-area {
     padding: 8px 10px;
     gap: 6px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 40;
+    background: white;
+    border-top: 1px solid var(--gray-200);
   }
 
   .input-area textarea {
     font-size: 15px;
     padding: 8px 10px;
+  }
+
+  .chat-area {
+    padding-bottom: 60px;
+  }
+
+  .messages-container {
+    padding-bottom: 8px;
   }
 
   .btn-send {

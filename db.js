@@ -332,6 +332,20 @@ async function runMigrations() {
     const historyCols = db.all("PRAGMA table_info(login_history)");
     if (!historyCols.some(c => c.name === 'location')) db.run("ALTER TABLE login_history ADD COLUMN location TEXT DEFAULT ''");
   }
+
+  // Ensure at least one admin exists (promote earliest user if needed)
+  try {
+    const adminCount = await queryOne("SELECT COUNT(*) as cnt FROM users WHERE role='admin'");
+    if (!adminCount || Number(adminCount.cnt) === 0) {
+      const firstUser = await queryOne('SELECT id FROM users ORDER BY created_at ASC LIMIT 1');
+      if (firstUser) {
+        await execute('UPDATE users SET role=$1 WHERE id=$2', ['admin', firstUser.id]);
+        console.log('👑 Migrated earliest user to admin');
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Admin migration failed:', e.message);
+  }
 }
 
 // ========== User Operations ==========
@@ -346,7 +360,7 @@ async function createUser(username, email, password, ip, location) {
 
   // First user is admin
   const userCount = await queryOne('SELECT COUNT(*) as cnt FROM users');
-  const role = (userCount && userCount.cnt === 0) ? 'admin' : 'user';
+  const role = (userCount && Number(userCount.cnt) === 0) ? 'admin' : 'user';
 
   let userId;
   if (isPostgres) {

@@ -387,7 +387,10 @@ function updateRoomOnlineCount() {}
 // ========== Helpers ==========
 function formatTime(d) {
   if (!d) return '';
-  const date = new Date(d + 'Z');
+  // Handle PostgreSQL timestamps already containing timezone, SQLite strings without Z, etc.
+  const raw = typeof d === 'string' ? d.trim() : d;
+  const date = new Date(raw.endsWith('Z') || raw.includes('+') ? raw : raw + 'Z');
+  if (isNaN(date.getTime())) return '';
   const now = new Date();
   const h = String(date.getHours()).padStart(2,'0');
   const m = String(date.getMinutes()).padStart(2,'0');

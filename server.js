@@ -320,7 +320,7 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', async (socket) => {
-  const userId = socket.user.id;
+  const userId = String(socket.user.id);
   const username = socket.user.username;
 
   if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
@@ -470,7 +470,7 @@ async function broadcastUserStatus(userId, online) {
 
 async function getOnlineUsersInRoom(roomId) {
   const members = await db.getRoomMembers(roomId);
-  return members.map(m => ({ ...m, online: onlineUsers.has(m.id) }));
+  return members.map(m => ({ ...m, online: onlineUsers.has(String(m.id)) }));
 }
 
 // ========== Start Server ==========
