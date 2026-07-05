@@ -9,8 +9,21 @@ let fetch; // loaded lazily
 
 // ========== PostgreSQL ==========
 async function initPostgres(databaseUrl) {
+  // Force IPv4 by resolving hostname first (fixes ENETUNREACH on Render)
+  const dns = require('dns');
+  const url = new URL(databaseUrl);
+  try {
+    const { address } = await dns.promises.lookup(url.hostname, { family: 4 });
+    if (address && address !== url.hostname) {
+      databaseUrl = databaseUrl.replace(url.hostname, address);
+      console.log(`📡 Resolved ${url.hostname} → ${address} (IPv4)`);
+    }
+  } catch (e) {
+    console.warn(`⚠️ DNS IPv4 lookup failed for ${url.hostname}, trying direct connection:`, e.message);
+  }
+
   const { Pool } = require('pg');
-  const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false }, family: 4 });
+  const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
   const client = await pool.connect();
   console.log('✅ Connected to PostgreSQL (Supabase)');
   const PG = {
