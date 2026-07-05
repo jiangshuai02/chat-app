@@ -1911,20 +1911,19 @@ async function initPage() {
   loadFriends();
   showActiveAnnouncements();
 
-  // iOS Safari: keep input above keyboard using visualViewport
+  // iOS Safari: keyboard overlays content, use visualViewport to position input
   if (window.visualViewport) {
-    let initialViewportHeight = window.visualViewport.height;
+    const layoutHeight = window.innerHeight;
     const setInputPosition = () => {
       const vv = window.visualViewport;
       const inputArea = document.getElementById('inputArea');
       const chatArea = document.getElementById('chatArea');
       const emptyState = document.getElementById('emptyState');
+      const messagesList = document.getElementById('messagesList');
       if (!inputArea) return;
       
-      // iOS: vv.offsetTop is negative when keyboard is open
-      // The visual viewport is "scrolled up" to show the focused element
-      const offset = Math.abs(Math.min(0, vv.offsetTop || 0));
-      const keyboardHeight = offset > 50 ? offset : 0;
+      // With overlays-content, window.innerHeight is layout height, vv.height is visible height
+      const keyboardHeight = Math.max(0, layoutHeight - vv.height);
       
       inputArea.style.position = 'fixed';
       inputArea.style.bottom = keyboardHeight + 'px';
@@ -1947,11 +1946,15 @@ async function initPage() {
         emptyState.style.left = '0';
         emptyState.style.right = '0';
       }
+      if (messagesList) {
+        messagesList.style.paddingBottom = keyboardHeight + 'px';
+      }
     };
     window.visualViewport.addEventListener('resize', setInputPosition);
     window.visualViewport.addEventListener('scroll', setInputPosition);
-    // Run once after init
-    setTimeout(setInputPosition, 500);
+    // Run once after init and after keyboard transition
+    setTimeout(setInputPosition, 300);
+    setTimeout(setInputPosition, 800);
   }
 
   // Handle page visibility changes (background → foreground)
