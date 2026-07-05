@@ -9,17 +9,56 @@ let fetch; // loaded lazily
 
 // ========== PostgreSQL ==========
 async function initPostgres(databaseUrl) {
-  // Force IPv4 by resolving hostname first (fixes ENETUNREACH on Render)
+  // Resolve hostname to IPv4 (Render has no IPv6 routing)
   const dns = require('dns');
-  const url = new URL(databaseUrl);
+  const originalUrl = databaseUrl;
+  let resolved = false;
   try {
-    const { address } = await dns.promises.lookup(url.hostname, { family: 4 });
-    if (address && address !== url.hostname) {
-      databaseUrl = databaseUrl.replace(url.hostname, address);
-      console.log(`📡 Resolved ${url.hostname} → ${address} (IPv4)`);
+    const parsedUrl = new URL(databaseUrl);
+    const { address } = await dns.promises.lookup(parsedUrl.hostname, { family: 4, all: false });
+    if (address) {
+      databaseUrl = databaseUrl.replace(parsedUrl.hostname, address);
+      console.log(`📡 Resolved ${parsedUrl.hostname} → ${address} (IPv4)`);
+      resolved = true;
     }
   } catch (e) {
-    console.warn(`⚠️ DNS IPv4 lookup failed for ${url.hostname}, trying direct connection:`, e.message);
+    console.warn(`⚠️ DNS IPv4 lookup failed for direct host:`, e.message);
+  }
+
+  // Fallback: try Supabase connection pooler (supports IPv4)
+  if (!resolved) {
+    const dbUrl = new URL(originalUrl);
+    const projectRef = dbUrl.hostname.split('.')[0]; // e.g. "db"
+    // Try common Supabase pooler hostname patterns
+    const poolerHosts = [
+      'aws-0-ap-southeast-1.pooler.supabase.com',
+      'aws-0-ap-southeast-2.pooler.supabase.com',
+      'aws-0-us-east-1.pooler.supabase.com',
+      'aws-0-eu-west-1.pooler.supabase.com',
+    ];
+    for (const host of poolerHosts) {
+      try {
+        await dns.promises.lookup(host, { family: 4 });
+        // This host resolves to IPv4, use it
+        const oldHost = dbUrl.hostname;
+        databaseUrl = originalUrl.replace(oldHost, host);
+        // Replace port 5432 with 6543 for pooler
+        databaseUrl = databaseUrl.replace(':5432', ':6543');
+        // Add pgbouncer=true if not present
+        if (!databaseUrl.includes('pgbouncer=true')) {
+          databaseUrl += (databaseUrl.includes('?') ? '&' : '?') + 'pgbouncer=true';
+        }
+        console.log(`📡 Using pooler: ${host}:6543 (IPv4 fallback)`);
+        resolved = true;
+        break;
+      } catch (e2) {
+        // Try next region
+      }
+    }
+  }
+
+  if (!resolved) {
+    console.warn('⚠️ Could not resolve any IPv4 address, trying direct connection anyway');
   }
 
   const { Pool } = require('pg');
