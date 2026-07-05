@@ -1911,8 +1911,8 @@ async function initPage() {
   loadFriends();
   showActiveAnnouncements();
 
-  // iOS Safari: keyboard overlays content, use visualViewport to position input
-  if (window.visualViewport) {
+  // iOS Safari: keyboard overlays content, use visualViewport to position input (only on mobile)
+  if (window.visualViewport && window.matchMedia('(max-width: 768px)').matches) {
     const layoutHeight = window.innerHeight;
     const setInputPosition = () => {
       const vv = window.visualViewport;
