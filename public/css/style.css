@@ -1256,7 +1256,9 @@ body {
     overflow: hidden;
   }
   .main-content {
-    flex: 1;
+    flex: none;
+    height: calc(100dvh - 52px);
+    margin-top: 52px;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -1296,8 +1298,15 @@ body {
   #backToRoomBtn { display: none !important; }
   .back-btn:hover { background: var(--gray-100); color: var(--gray-700); }
   .topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
     height: 52px;
-    flex-shrink: 0;
+    z-index: 99;
+    background: #fff;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   .chat-area {
     flex: 1;
