@@ -10,6 +10,8 @@ const state = {
   hasMoreMessages: new Map(),
   loadMoreIds: new Map(),
   isAdmin: false,
+  isUltimateAdmin: false,
+  pendingRoomPassword: null,
 };
 
 if (!state.token || !state.user.id) window.location.href = '/';
@@ -46,6 +48,10 @@ function connectSocket() {
   state.socket.on('message:new', (message) => {
     if (message.room_id === state.currentRoom?.id) { appendMessage(message); scrollToBottom(); }
     updateRoomLastMessage(message.room_id, message);
+  });
+
+  state.socket.on('message:recalled', ({ messageId }) => {
+    if (state.currentRoom) updateRecalledMessage(messageId);
   });
 
   state.socket.on('messages:loaded', (data) => {
@@ -152,9 +158,10 @@ function renderRooms() {
   const colors = ['#4f46e5','#0891b2','#059669','#d97706','#dc2626','#7c3aed','#db2777','#2563eb'];
   container.innerHTML = filtered.map(room => {
     const active = state.currentRoom?.id === room.id;
+    const isRoomAdmin = room.is_room_admin || room.created_by === state.user.id;
     return `<div class="room-item${active?' active':''}" onclick="switchRoom(${room.id})">
       <div class="room-avatar" style="background:${colors[room.id%colors.length]}">${room.name.charAt(0).toUpperCase()}</div>
-      <div class="room-info"><div class="room-name">${esc(room.name)}</div>
+      <div class="room-info"><div class="room-name">${esc(room.name)} ${room.has_password ? '🔒' : ''} ${isRoomAdmin ? '<span class="room-admin-badge">管</span>' : ''}</div>
         <div class="room-last-msg">${room.last_message_user?`${esc(room.last_message_user)}: ${esc(room.last_message||'')}`:'暂无消息'}</div></div>
       <div class="room-meta"><div class="room-member-count">${room.member_count || 0} 人</div></div>
     </div>`;
@@ -163,11 +170,22 @@ function renderRooms() {
 
 function filterRooms(q) { renderRooms(); }
 
-async function switchRoom(roomId) {
+async function switchRoom(roomId, password = '') {
   if (state.currentRoom?.id === roomId) return;
   if (state.currentRoom) state.typingUsers.clear();
   const room = state.rooms.find(r => r.id === roomId);
   if (!room) return;
+
+  // Check password-protected room
+  if (room.has_password && !room.is_room_admin && !state.isAdmin && !password) {
+    state.pendingRoomPassword = roomId;
+    document.getElementById('roomPasswordLabel').textContent = `房间 "${esc(room.name)}" 需要密码`;
+    document.getElementById('roomPasswordInput').value = '';
+    document.getElementById('roomPasswordError').textContent = '';
+    document.getElementById('roomPasswordModal').classList.add('show');
+    return;
+  }
+
   state.currentRoom = room;
   document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
   renderRooms();
@@ -179,7 +197,7 @@ async function switchRoom(roomId) {
   document.getElementById('inputArea').style.display = 'flex';
   document.getElementById('messagesList').innerHTML = '';
   state.messages.delete(roomId);
-  state.socket.emit('join:room', roomId);
+  state.socket.emit('join:room', { roomId, password });
   await loadMessages(roomId);
   scrollToBottom();
   closeSidebar();
@@ -190,7 +208,19 @@ async function loadMessages(roomId) {
     const res = await fetch(`${API}/api/rooms/${roomId}/messages?limit=50`, { headers: { 'Authorization': `Bearer ${state.token}` } });
     if (!res.ok) {
       if (res.status === 403) {
-        await fetch(`${API}/api/rooms/${roomId}/join`, { method: 'POST', headers: { 'Authorization': `Bearer ${state.token}` } });
+        // Try joining via API (for password-protected rooms this will fail without password)
+        const joinRes = await fetch(`${API}/api/rooms/${roomId}/join`, { method: 'POST', headers: { 'Authorization': `Bearer ${state.token}` } });
+        if (!joinRes.ok) {
+          const room = state.rooms.find(r => r.id === roomId);
+          if (room) {
+            state.pendingRoomPassword = roomId;
+            document.getElementById('roomPasswordLabel').textContent = `房间 "${esc(room.name)}" 需要密码`;
+            document.getElementById('roomPasswordInput').value = '';
+            document.getElementById('roomPasswordError').textContent = '需要密码才能进入';
+            document.getElementById('roomPasswordModal').classList.add('show');
+          }
+          return;
+        }
         return loadMessages(roomId);
       }
       throw new Error('加载消息失败');
@@ -221,20 +251,55 @@ function appendMessageToContainer(container, msg) {
   const username = msg.display_name || msg.username || 'Unknown';
   const time = formatTime(msg.created_at);
   const div = document.createElement('div');
-  div.className = `message${own?' own':''}`;
+  div.className = `message${own?' own':''}${msg.is_recalled?' recalled':''}`;
   div.dataset.messageId = msg.id;
   
+  const canRecall = own || state.isAdmin;
+  const recallBtn = canRecall ? `<button class="msg-recall-btn" onclick="recallMessage(${msg.id})" title="撤回">↩️</button>` : '';
+  
   let contentHtml = '';
-  if (msg.type === 'image' || msg.file_url) {
+  if (msg.is_recalled) {
+    if (state.isAdmin) {
+      // Admin sees original content with recalled label
+      contentHtml = `<div class="message-bubble recalled-bubble"><span class="recall-label">[已撤回] </span>${msg.type === 'image' && msg.file_url ? `<div class="message-image"><a href="${esc(msg.file_url)}" target="_blank"><img src="${esc(msg.file_url)}" alt="图片" loading="lazy"></a></div>` : ''}${msg.content ? esc(msg.content) : ''}</div>`;
+    } else {
+      contentHtml = `<div class="message-bubble recalled-bubble">消息已撤回</div>`;
+    }
+  } else if (msg.type === 'image' || msg.file_url) {
     contentHtml = `<div class="message-image"><a href="${esc(msg.file_url)}" target="_blank"><img src="${esc(msg.file_url)}" alt="图片" loading="lazy"></a></div>${msg.content ? `<div class="message-bubble">${esc(msg.content)}</div>` : ''}`;
   } else {
     contentHtml = `<div class="message-bubble">${esc(msg.content)}</div>`;
   }
   
   div.innerHTML = `<div class="message-avatar" style="background:${msg.avatar_color||'#4f46e5'}">${username.charAt(0).toUpperCase()}</div>
-    <div class="message-body"><div class="message-header"><span class="message-username">${esc(username)}</span><span class="message-time">${time}</span></div>
+    <div class="message-body"><div class="message-header"><span class="message-username">${esc(username)}</span><span class="message-time">${time}</span>${recallBtn}</div>
     ${contentHtml}</div>`;
   container.appendChild(div);
+}
+
+function updateRecalledMessage(messageId) {
+  const container = document.getElementById('messagesList');
+  const div = container.querySelector(`[data-message-id="${messageId}"]`);
+  if (div && state.currentRoom) {
+    const msgs = state.messages.get(state.currentRoom.id) || [];
+    const msg = msgs.find(m => m.id === messageId);
+    if (msg) {
+      msg.is_recalled = 1;
+      appendMessageToContainer(div.parentNode, msg);
+      div.remove();
+    }
+  }
+}
+
+async function recallMessage(messageId) {
+  try {
+    const res = await fetch(`${API}/api/messages/${messageId}/recall`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    updateRecalledMessage(messageId);
+  } catch (e) { showToast('撤回失败', 'error'); }
 }
 
 function prependMessages(msgs) {
@@ -343,17 +408,45 @@ document.addEventListener('click', (e) => {
 // ========== Create Room ==========
 function showCreateRoom() {
   document.getElementById('createRoomModal').classList.add('show');
-  document.getElementById('roomName').value = ''; document.getElementById('roomDesc').value = ''; document.getElementById('roomError').textContent = '';
+  document.getElementById('roomName').value = ''; document.getElementById('roomDesc').value = ''; document.getElementById('roomPassword').value = ''; document.getElementById('roomError').textContent = '';
   document.getElementById('roomName').focus();
 }
 function closeCreateRoom() { document.getElementById('createRoomModal').classList.remove('show'); }
 function createRoom() {
   const name = document.getElementById('roomName').value.trim();
   const description = document.getElementById('roomDesc').value.trim();
+  const password = document.getElementById('roomPassword').value;
   const err = document.getElementById('roomError');
   if (!name) { err.textContent = '请输入房间名称'; return; }
   if (name.length > 30) { err.textContent = '房间名不能超过30个字符'; return; }
-  state.socket.emit('room:create', { name, description });
+  state.socket.emit('room:create', { name, description, password });
+}
+
+// ========== Room Password Modal ==========
+function closeRoomPasswordModal() {
+  document.getElementById('roomPasswordModal').classList.remove('show');
+  state.pendingRoomPassword = null;
+}
+async function confirmRoomPassword() {
+  const roomId = state.pendingRoomPassword;
+  const password = document.getElementById('roomPasswordInput').value;
+  if (!roomId) return;
+  try {
+    const res = await fetch(`${API}/api/rooms/${roomId}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ password })
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      document.getElementById('roomPasswordError').textContent = data.error || '密码错误';
+      return;
+    }
+    closeRoomPasswordModal();
+    await switchRoom(roomId, password);
+  } catch (e) {
+    document.getElementById('roomPasswordError').textContent = '进入房间失败';
+  }
 }
 
 // ========== Room Members ==========
@@ -371,7 +464,7 @@ function renderMembers(members) {
     ? '<div style="text-align:center;padding:20px;color:var(--gray-400);">暂无成员</div>'
     : members.map(m => `<div class="member-item" data-user-id="${m.id}">
       <div class="member-avatar" style="background:${m.avatar_color||'#4f46e5'}">${(m.display_name||m.username).charAt(0).toUpperCase()}</div>
-      <div class="member-info"><div class="member-name">${esc(m.display_name||m.username)}</div>
+      <div class="member-info"><div class="member-name">${esc(m.display_name||m.username)} ${m.is_admin ? '<span class="admin-badge">房间管理员</span>' : ''}</div>
       <div class="member-status${m.online?' online':''}">${m.online?'在线':'离线'}${m.role==='admin'?' · 管理员':''}</div></div>
     </div>`).join('');
 }
@@ -438,6 +531,9 @@ async function checkAdminStatus() {
       state.isAdmin = true;
       document.getElementById('adminBtn').style.display = 'inline-flex';
     }
+    if (data.user?.isUltimateAdmin) {
+      state.isUltimateAdmin = true;
+    }
   } catch(e) {}
 }
 
@@ -461,6 +557,7 @@ async function loadAdminData(tab) {
   if (tab === 'keywords') await loadKeywords();
   else if (tab === 'users') await loadUsers();
   else if (tab === 'rooms') await loadAdminRooms();
+  else if (tab === 'announcements') await loadAnnouncements();
 }
 
 // ---- Keywords ----
@@ -520,19 +617,39 @@ async function loadUsers() {
 function renderUsers(users) {
   const container = document.getElementById('userList');
   if (!users.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--gray-400);">暂无用户</div>'; return; }
-  container.innerHTML = users.map(u => `
+  container.innerHTML = users.map(u => {
+    const isUltimate = u.is_ultimate_admin === 1;
+    const canManageRole = state.isAdmin && !isUltimate;
+    const roleBtn = canManageRole
+      ? `<button class="btn btn-${u.role==='admin'?'danger':'primary'} btn-sm" onclick="toggleUserRole(${u.id},'${u.role==='admin'?'user':'admin'}')">${u.role==='admin'?'取消管理员':'设为管理员'}</button>`
+      : '';
+    return `
     <div class="admin-item">
       <div class="user-avatar-sm" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
       <div class="admin-item-info">
-        <span class="admin-item-title">${esc(u.display_name||u.username)} ${u.role==='admin'?'<span class="admin-badge">管理员</span>':''}</span>
+        <span class="admin-item-title">${esc(u.display_name||u.username)} ${u.role==='admin'?'<span class="admin-badge">管理员</span>':''} ${isUltimate?'<span class="badge-danger">终极管理员</span>':''}</span>
         <span class="admin-item-sub">${esc(u.email)} · ${u.last_login_location ? esc(u.last_login_location) : '未知位置'} · IP: ${u.last_login_ip||'未知'} · 注册: ${u.created_at}</span>
       </div>
       <div class="admin-item-actions">
         <button class="btn btn-secondary btn-sm" onclick="viewUserDetail(${u.id})">详情</button>
         <button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>
+        ${roleBtn}
       </div>
     </div>
-  `).join('');
+  `}).join('');
+}
+
+async function toggleUserRole(userId, newRole) {
+  try {
+    const res = await fetch(`${API}/api/admin/users/${userId}/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ role: newRole })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    showToast(newRole === 'admin' ? '已设为管理员' : '已取消管理员', 'info');
+    await loadUsers();
+  } catch (e) { showToast('操作失败', 'error'); }
 }
 
 async function viewUserDetail(userId) {
@@ -666,13 +783,122 @@ async function deleteAdminRoom(roomId) {
   } catch(e) { showToast('删除失败', 'error'); }
 }
 
+async function loadAnnouncements() {
+  try {
+    const res = await fetch(`${API}/api/admin/announcements`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    renderAnnouncements(data.announcements || []);
+  } catch (e) { console.error(e); }
+}
+
+function renderAnnouncements(announcements) {
+  const container = document.getElementById('announcementList');
+  if (!announcements.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--gray-400);">暂无公告</div>'; return; }
+  container.innerHTML = announcements.map(a => `
+    <div class="admin-item">
+      <div class="admin-item-info" style="min-width:0;">
+        <span class="admin-item-title">${esc(a.title)} ${a.is_active?'<span class="admin-badge">已发布</span>':'<span class="badge-danger">已下架</span>'}</span>
+        <span class="admin-item-sub">${esc(a.created_by_name||'管理员')} · ${a.created_at}</span>
+      </div>
+      <div class="admin-item-actions">
+        <button class="btn btn-secondary btn-sm" onclick="editAnnouncement(${a.id})">编辑</button>
+        <button class="btn btn-${a.is_active?'danger':'primary'} btn-sm" onclick="toggleAnnouncement(${a.id},${a.is_active?0:1})">${a.is_active?'下架':'发布'}</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteAnnouncement(${a.id})">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function addAnnouncement() {
+  const title = document.getElementById('announcementTitle').value.trim();
+  const content = document.getElementById('announcementContent').value.trim();
+  if (!title || !content) { showToast('标题和内容不能为空', 'error'); return; }
+  try {
+    const res = await fetch(`${API}/api/admin/announcements`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ title, content })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    document.getElementById('announcementTitle').value = '';
+    document.getElementById('announcementContent').value = '';
+    await loadAnnouncements();
+  } catch (e) { showToast('发布失败', 'error'); }
+}
+
+async function toggleAnnouncement(id, active) {
+  try {
+    await fetch(`${API}/api/admin/announcements/${id}/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ active: !!active })
+    });
+    await loadAnnouncements();
+  } catch (e) { showToast('操作失败', 'error'); }
+}
+
+async function deleteAnnouncement(id) {
+  if (!confirm('确定删除这条公告吗？')) return;
+  try {
+    await fetch(`${API}/api/admin/announcements/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${state.token}` } });
+    await loadAnnouncements();
+  } catch (e) { showToast('删除失败', 'error'); }
+}
+
+async function editAnnouncement(id) {
+  try {
+    const res = await fetch(`${API}/api/admin/announcements`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    const ann = (data.announcements || []).find(a => a.id === id);
+    if (!ann) return;
+    document.getElementById('editAnnouncementId').value = ann.id;
+    document.getElementById('editAnnouncementTitle').value = ann.title;
+    document.getElementById('editAnnouncementContent').value = ann.content;
+    document.getElementById('editAnnouncementModal').classList.add('show');
+  } catch (e) { console.error(e); }
+}
+
+async function saveAnnouncement() {
+  const id = document.getElementById('editAnnouncementId').value;
+  const title = document.getElementById('editAnnouncementTitle').value.trim();
+  const content = document.getElementById('editAnnouncementContent').value.trim();
+  if (!title || !content) { showToast('标题和内容不能为空', 'error'); return; }
+  try {
+    const res = await fetch(`${API}/api/admin/announcements/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ title, content })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    closeEditAnnouncementModal();
+    await loadAnnouncements();
+  } catch (e) { showToast('保存失败', 'error'); }
+}
+
+function closeEditAnnouncementModal() { document.getElementById('editAnnouncementModal').classList.remove('show'); }
+function closeAnnouncementModal() { document.getElementById('announcementModal').classList.remove('show'); }
+
+async function showActiveAnnouncements() {
+  try {
+    const res = await fetch(`${API}/api/announcements`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    const announcements = data.announcements || [];
+    if (announcements.length > 0) {
+      const latest = announcements[0];
+      document.getElementById('announcementPopupTitle').textContent = `📢 ${esc(latest.title)}`;
+      document.getElementById('announcementPopupContent').textContent = latest.content;
+      document.getElementById('announcementModal').classList.add('show');
+    }
+  } catch (e) { console.error(e); }
+}
+
 // Modal close handler
 function closeModal(e) { if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('show'); }
 
 // Escape key
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    closeCreateRoom(); closeMembers(); closeAdminPanel(); closeUserDetail(); closeMuteModal();
+    closeCreateRoom(); closeMembers(); closeAdminPanel(); closeUserDetail(); closeMuteModal(); closeRoomPasswordModal(); closeAnnouncementModal(); closeEditAnnouncementModal();
   }
 });
 
@@ -694,6 +920,7 @@ async function initPage() {
   }
   await checkAdminStatus();
   connectSocket();
+  showActiveAnnouncements();
 }
 
 initPage();

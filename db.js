@@ -157,6 +157,7 @@ async function createTables() {
       display_name VARCHAR(100),
       avatar_color VARCHAR(7) DEFAULT '#4f46e5',
       role VARCHAR(10) DEFAULT 'user',
+      is_ultimate_admin INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT NOW(),
       last_seen TIMESTAMP DEFAULT NOW(),
       last_login_ip VARCHAR(45) DEFAULT '',
@@ -167,6 +168,7 @@ async function createTables() {
       id SERIAL PRIMARY KEY,
       name VARCHAR(100) NOT NULL,
       description TEXT DEFAULT '',
+      password VARCHAR(255) DEFAULT '',
       created_by INTEGER REFERENCES users(id),
       created_at TIMESTAMP DEFAULT NOW(),
       is_banned INTEGER DEFAULT 0
@@ -176,6 +178,7 @@ async function createTables() {
       id SERIAL PRIMARY KEY,
       room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      is_admin INTEGER DEFAULT 0,
       joined_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(room_id, user_id)
     );
@@ -187,6 +190,8 @@ async function createTables() {
       type VARCHAR(20) DEFAULT 'text',
       content TEXT NOT NULL,
       file_url TEXT DEFAULT '',
+      is_recalled INTEGER DEFAULT 0,
+      recalled_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -214,6 +219,18 @@ async function createTables() {
       logged_in_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS announcements (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(200) NOT NULL,
+      content TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at);
+
     CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
     CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
@@ -234,6 +251,7 @@ function createTablesSQLite() {
       display_name TEXT,
       avatar_color TEXT DEFAULT '#4f46e5',
       role TEXT DEFAULT 'user',
+      is_ultimate_admin INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT (datetime('now','localtime')),
       last_seen DATETIME DEFAULT (datetime('now','localtime')),
       last_login_ip TEXT DEFAULT '',
@@ -242,6 +260,7 @@ function createTablesSQLite() {
     CREATE TABLE IF NOT EXISTS rooms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, description TEXT DEFAULT '',
+      password TEXT DEFAULT '',
       created_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT (datetime('now','localtime')),
       is_banned INTEGER DEFAULT 0
@@ -250,6 +269,7 @@ function createTablesSQLite() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      is_admin INTEGER DEFAULT 0,
       joined_at DATETIME DEFAULT (datetime('now','localtime')),
       UNIQUE(room_id, user_id)
     );
@@ -260,6 +280,8 @@ function createTablesSQLite() {
       type TEXT DEFAULT 'text',
       content TEXT NOT NULL,
       file_url TEXT DEFAULT '',
+      is_recalled INTEGER DEFAULT 0,
+      recalled_at DATETIME,
       created_at DATETIME DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS banned_keywords (
@@ -283,12 +305,22 @@ function createTablesSQLite() {
       location TEXT DEFAULT '',
       logged_in_at DATETIME DEFAULT (datetime('now','localtime'))
     );
+    CREATE TABLE IF NOT EXISTS announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT (datetime('now','localtime')),
+      updated_at DATETIME DEFAULT (datetime('now','localtime'))
+    );
   `);
   try { L.run("CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id,created_at)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_muted_users ON muted_users(user_id)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_login_history ON login_history(user_id)"); }catch(e){}
+  try { L.run("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)"); }catch(e){}
   ensureDefaultRoomsSQLite();
 }
 
@@ -314,11 +346,31 @@ async function runMigrations() {
   // Messages table: add type and file_url columns
   // Users table: add last_login_location column
   // Login history: add location column
+  // Rooms: add password column
+  // Room members: add is_admin column
+  // Messages: add is_recalled and recalled_at columns
+  // Users: add is_ultimate_admin column
+  // Announcements table
   if (isPostgres) {
     await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'text'");
     await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT DEFAULT ''");
     await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_location VARCHAR(100) DEFAULT ''");
     await execute("ALTER TABLE login_history ADD COLUMN IF NOT EXISTS location VARCHAR(100) DEFAULT ''");
+    await execute("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS password VARCHAR(255) DEFAULT ''");
+    await execute("ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_admin INTEGER DEFAULT 0");
+    await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_recalled INTEGER DEFAULT 0");
+    await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS recalled_at TIMESTAMP");
+    await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ultimate_admin INTEGER DEFAULT 0");
+    await execute(`CREATE TABLE IF NOT EXISTS announcements (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(200) NOT NULL,
+      content TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)");
   } else {
     const msgCols = db.all("PRAGMA table_info(messages)");
     const hasMsgType = msgCols.some(c => c.name === 'type');
@@ -328,9 +380,34 @@ async function runMigrations() {
 
     const userCols = db.all("PRAGMA table_info(users)");
     if (!userCols.some(c => c.name === 'last_login_location')) db.run("ALTER TABLE users ADD COLUMN last_login_location TEXT DEFAULT ''");
+    if (!userCols.some(c => c.name === 'is_ultimate_admin')) db.run("ALTER TABLE users ADD COLUMN is_ultimate_admin INTEGER DEFAULT 0");
 
     const historyCols = db.all("PRAGMA table_info(login_history)");
     if (!historyCols.some(c => c.name === 'location')) db.run("ALTER TABLE login_history ADD COLUMN location TEXT DEFAULT ''");
+
+    const roomCols = db.all("PRAGMA table_info(rooms)");
+    if (!roomCols.some(c => c.name === 'password')) db.run("ALTER TABLE rooms ADD COLUMN password TEXT DEFAULT ''");
+
+    const memberCols = db.all("PRAGMA table_info(room_members)");
+    if (!memberCols.some(c => c.name === 'is_admin')) db.run("ALTER TABLE room_members ADD COLUMN is_admin INTEGER DEFAULT 0");
+
+    const messageCols = db.all("PRAGMA table_info(messages)");
+    if (!messageCols.some(c => c.name === 'is_recalled')) db.run("ALTER TABLE messages ADD COLUMN is_recalled INTEGER DEFAULT 0");
+    if (!messageCols.some(c => c.name === 'recalled_at')) db.run("ALTER TABLE messages ADD COLUMN recalled_at DATETIME");
+
+    const announcementsExists = db.all("SELECT name FROM sqlite_master WHERE type='table' AND name='announcements'");
+    if (!announcementsExists.length) {
+      db.run(`CREATE TABLE announcements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_by INTEGER REFERENCES users(id),
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        updated_at DATETIME DEFAULT (datetime('now','localtime'))
+      )`);
+      db.run("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)");
+    }
   }
 
   // Ensure at least one admin exists (promote earliest user if needed)
@@ -339,7 +416,7 @@ async function runMigrations() {
     if (!adminCount || Number(adminCount.cnt) === 0) {
       const firstUser = await queryOne('SELECT id FROM users ORDER BY created_at ASC LIMIT 1');
       if (firstUser) {
-        await execute('UPDATE users SET role=$1 WHERE id=$2', ['admin', firstUser.id]);
+        await execute('UPDATE users SET role=$1, is_ultimate_admin=1 WHERE id=$2', ['admin', firstUser.id]);
         console.log('👑 Migrated earliest user to admin');
       }
     }
@@ -358,22 +435,24 @@ async function createUser(username, email, password, ip, location) {
   const colors = ['#4f46e5','#0891b2','#059669','#d97706','#dc2626','#7c3aed','#db2777','#2563eb'];
   const color = colors[Math.floor(Math.random()*colors.length)];
 
-  // First user is admin
+  // First user is admin and ultimate admin
   const userCount = await queryOne('SELECT COUNT(*) as cnt FROM users');
-  const role = (userCount && Number(userCount.cnt) === 0) ? 'admin' : 'user';
+  const isFirstUser = userCount && Number(userCount.cnt) === 0;
+  const role = isFirstUser ? 'admin' : 'user';
+  const isUltimate = isFirstUser ? 1 : 0;
 
   let userId;
   if (isPostgres) {
-    const r = await db.all('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip,last_login_location) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-      [username,email,hashedPassword,username,color,role,ip||'',location||'']);
+    const r = await db.all('INSERT INTO users (username,email,password,display_name,avatar_color,role,is_ultimate_admin,last_login_ip,last_login_location) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
+      [username,email,hashedPassword,username,color,role,isUltimate,ip||'',location||'']);
     userId = r[0].id;
   } else {
-    db.run('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip,last_login_location) VALUES (?,?,?,?,?,?,?,?)',
-      [username,email,hashedPassword,username,color,role,ip||'',location||'']);
+    db.run('INSERT INTO users (username,email,password,display_name,avatar_color,role,is_ultimate_admin,last_login_ip,last_login_location) VALUES (?,?,?,?,?,?,?,?,?)',
+      [username,email,hashedPassword,username,color,role,isUltimate,ip||'',location||'']);
     userId = db.lastInsertRowid;
   }
 
-  const defaultRooms = isPostgres ? await query('SELECT id FROM rooms') : db.all('SELECT id FROM rooms');
+  const defaultRooms = isPostgres ? await query('SELECT id FROM rooms WHERE password IS NULL OR password = \'\'') : db.all('SELECT id FROM rooms WHERE password IS NULL OR password = \'\'');
   for (const room of defaultRooms) {
     try { await execute('INSERT INTO room_members (room_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [room.id, userId]); }
     catch(e) { try { execute('INSERT OR IGNORE INTO room_members (room_id,user_id) VALUES (?,?)', [room.id, userId]); } catch(e2) {} }
@@ -437,28 +516,40 @@ async function isUserAdmin(userId) {
 
 // ========== Room Operations ==========
 
-async function createRoom(name, description, userId) {
+async function createRoom(name, description, userId, password = '') {
   const existing = await queryOne('SELECT id FROM rooms WHERE name=$1', [name]);
   if (existing) throw new Error('该房间名已存在');
+  const hashedPassword = password ? bcrypt.hashSync(password, 10) : '';
   let roomId;
   if (isPostgres) {
-    const r = await db.all('INSERT INTO rooms (name,description,created_by) VALUES ($1,$2,$3) RETURNING id', [name,description,userId]);
+    const r = await db.all('INSERT INTO rooms (name,description,password,created_by) VALUES ($1,$2,$3,$4) RETURNING id', [name,description,hashedPassword,userId]);
     roomId = r[0].id;
   } else {
-    db.run('INSERT INTO rooms (name,description,created_by) VALUES (?,?,?)', [name,description,userId]);
+    db.run('INSERT INTO rooms (name,description,password,created_by) VALUES (?,?,?,?)', [name,description,hashedPassword,userId]);
     roomId = db.lastInsertRowid;
   }
-  await execute('INSERT INTO room_members (room_id,user_id) VALUES ($1,$2)', [roomId, userId]);
+  await execute('INSERT INTO room_members (room_id,user_id,is_admin) VALUES ($1,$2,1)', [roomId, userId]);
   return await getRoomById(roomId);
 }
 
 async function getRoomById(roomId) {
+  const room = await queryOne('SELECT * FROM rooms WHERE id=$1', [roomId]);
+  if (room) {
+    room.has_password = !!room.password;
+    delete room.password;
+  }
+  return room;
+}
+
+async function getRoomRawById(roomId) {
   return await queryOne('SELECT * FROM rooms WHERE id=$1', [roomId]);
 }
 
 async function getUserRooms(userId) {
   return await query(`
-    SELECT r.*, rm.joined_at,
+    SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
+           CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
+           rm.joined_at, rm.is_admin as is_room_admin,
       (SELECT COUNT(*) FROM room_members WHERE room_id=r.id)::int as member_count,
       (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) as last_message,
       (SELECT username FROM messages m JOIN users u ON m.user_id=u.id WHERE m.room_id=r.id ORDER BY m.created_at DESC LIMIT 1) as last_message_user
@@ -468,12 +559,24 @@ async function getUserRooms(userId) {
 
 async function getAllRooms() {
   if (isPostgres) {
-    return await query(`SELECT r.*, (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
+    return await query(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
+      CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
+      (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
   }
-  return db.all(`SELECT r.*, (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
+  return db.all(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
+    CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
+    (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
 }
 
-async function joinRoom(roomId, userId) {
+async function joinRoom(roomId, userId, password = '', skipPassword = false) {
+  const room = await getRoomRawById(roomId);
+  if (!room) throw new Error('房间不存在');
+  const member = await queryOne('SELECT id FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, userId]);
+  if (member) return; // already joined
+  if (room.password && !skipPassword) {
+    const valid = password && bcrypt.compareSync(password, room.password);
+    if (!valid) throw new Error('房间密码错误');
+  }
   try { await execute('INSERT INTO room_members (room_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [roomId,userId]); }
   catch(e) { try { await execute('INSERT OR IGNORE INTO room_members (room_id,user_id) VALUES (?,?)', [roomId,userId]); } catch(e2) {} }
 }
@@ -482,8 +585,17 @@ async function leaveRoom(roomId, userId) {
   await execute('DELETE FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, userId]);
 }
 
+async function isRoomAdmin(roomId, userId) {
+  const r = await queryOne('SELECT is_admin FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, userId]);
+  return r && r.is_admin === 1;
+}
+
+async function setRoomAdmin(roomId, userId, isAdmin) {
+  await execute('UPDATE room_members SET is_admin=$3 WHERE room_id=$1 AND user_id=$2', [roomId, userId, isAdmin ? 1 : 0]);
+}
+
 async function getRoomMembers(roomId) {
-  return await query(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.last_seen,u.role FROM users u JOIN room_members rm ON rm.user_id=u.id WHERE rm.room_id=$1`, [roomId]);
+  return await query(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.last_seen,u.role,rm.is_admin FROM users u JOIN room_members rm ON rm.user_id=u.id WHERE rm.room_id=$1`, [roomId]);
 }
 
 async function isRoomMember(roomId, userId) {
@@ -613,7 +725,7 @@ async function isUserMuted(userId, roomId) {
 
 async function getAllUsers() {
   return await query(
-    'SELECT id,username,email,display_name,avatar_color,role,created_at,last_seen,last_login_ip,last_login_location FROM users ORDER BY created_at DESC');
+    'SELECT id,username,email,display_name,avatar_color,role,is_ultimate_admin,created_at,last_seen,last_login_ip,last_login_location FROM users ORDER BY created_at DESC');
 }
 
 async function getUserPasswordHash(userId) {
@@ -623,6 +735,66 @@ async function getUserPasswordHash(userId) {
 
 async function getLoginHistory(userId, limit=20) {
   return await query('SELECT * FROM login_history WHERE user_id=$1 ORDER BY logged_in_at DESC LIMIT $2', [userId, limit]);
+}
+
+async function recallMessage(messageId, userId) {
+  const msg = await getMessageById(messageId);
+  if (!msg) throw new Error('消息不存在');
+  if (msg.user_id !== userId) throw new Error('只能撤回自己的消息');
+  if (isPostgres) {
+    await execute('UPDATE messages SET is_recalled=1, recalled_at=NOW() WHERE id=$1', [messageId]);
+  } else {
+    await execute("UPDATE messages SET is_recalled=1, recalled_at=datetime('now','localtime') WHERE id=$1", [messageId]);
+  }
+  return await getMessageById(messageId);
+}
+
+// ========== Admin: Announcements ==========
+async function createAnnouncement(title, content, adminId) {
+  if (isPostgres) {
+    const r = await db.all('INSERT INTO announcements (title, content, created_by) VALUES ($1,$2,$3) RETURNING id', [title, content, adminId]);
+    return await getAnnouncementById(r[0].id);
+  }
+  db.run('INSERT INTO announcements (title, content, created_by) VALUES (?,?,?)', [title, content, adminId]);
+  return await getAnnouncementById(db.lastInsertRowid);
+}
+
+async function updateAnnouncement(id, title, content) {
+  if (isPostgres) {
+    await execute('UPDATE announcements SET title=$1, content=$2, updated_at=NOW() WHERE id=$3', [title, content, id]);
+  } else {
+    await execute("UPDATE announcements SET title=$1, content=$2, updated_at=datetime('now','localtime') WHERE id=$3", [title, content, id]);
+  }
+  return await getAnnouncementById(id);
+}
+
+async function deleteAnnouncement(id) {
+  await execute('DELETE FROM announcements WHERE id=$1', [id]);
+}
+
+async function getAnnouncementById(id) {
+  return await queryOne('SELECT a.*, u.username as created_by_name FROM announcements a LEFT JOIN users u ON u.id=a.created_by WHERE a.id=$1', [id]);
+}
+
+async function getActiveAnnouncements() {
+  return await query('SELECT a.*, u.username as created_by_name FROM announcements a LEFT JOIN users u ON u.id=a.created_by WHERE a.is_active=1 ORDER BY a.created_at DESC');
+}
+
+async function getAllAnnouncements() {
+  return await query('SELECT a.*, u.username as created_by_name FROM announcements a LEFT JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC');
+}
+
+async function setAnnouncementActive(id, active) {
+  await execute('UPDATE announcements SET is_active=$2 WHERE id=$1', [id, active ? 1 : 0]);
+}
+
+async function isUltimateAdmin(userId) {
+  const r = await queryOne('SELECT is_ultimate_admin FROM users WHERE id=$1', [userId]);
+  return r && r.is_ultimate_admin === 1;
+}
+
+async function setUserRole(userId, role) {
+  await execute('UPDATE users SET role=$1 WHERE id=$2', [role, userId]);
 }
 
 // ========== IP Geolocation ==========
@@ -659,12 +831,15 @@ module.exports = {
   isUserAdmin,
   createRoom,
   getRoomById,
+  getRoomRawById,
   getUserRooms,
   getAllRooms,
   joinRoom,
   leaveRoom,
   getRoomMembers,
   isRoomMember,
+  isRoomAdmin,
+  setRoomAdmin,
   deleteRoom,
   setRoomBanned,
   isRoomBanned,
@@ -672,6 +847,7 @@ module.exports = {
   getMessageById,
   getRoomMessages,
   getUserMessages,
+  recallMessage,
   getUserCreatedRooms,
   addBannedKeyword,
   removeBannedKeyword,
@@ -683,5 +859,14 @@ module.exports = {
   getAllUsers,
   getUserPasswordHash,
   getLoginHistory,
+  createAnnouncement,
+  updateAnnouncement,
+  deleteAnnouncement,
+  getAnnouncementById,
+  getActiveAnnouncements,
+  getAllAnnouncements,
+  setAnnouncementActive,
+  isUltimateAdmin,
+  setUserRole,
   lookupIP,
 };

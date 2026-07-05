@@ -1130,9 +1130,52 @@ body {
 }
 
 /* ========== System Message ========== */
-.message.system {
-  justify-content: center;
-  max-width: 100%;
+.message.recalled .message-bubble {
+  background: var(--gray-100);
+  color: var(--gray-400);
+  font-style: italic;
+}
+
+.message.recalled.own .message-bubble {
+  background: var(--gray-200);
+  color: var(--gray-500);
+}
+
+.recalled-bubble {
+  background: var(--gray-100) !important;
+  color: var(--gray-400) !important;
+  font-style: italic;
+}
+
+.recall-label {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.msg-recall-btn {
+  opacity: 0;
+  transition: opacity 0.2s;
+  margin-left: 4px;
+  font-size: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.message:hover .msg-recall-btn {
+  opacity: 1;
+}
+
+.room-admin-badge {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--warning);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 4px;
 }
 
 .message.system .message-bubble {
@@ -1169,6 +1212,32 @@ body {
 @keyframes slideDown {
   from { transform: translateY(-100%); }
   to { transform: translateY(0); }
+}
+
+/* ========== Announcements ========== */
+#announcementModal .modal {
+  max-width: 480px;
+}
+
+#announcementModal #announcementPopupContent {
+  max-height: 60vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.admin-add-row textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  resize: vertical;
+  min-height: 60px;
+}
+
+.admin-add-row textarea:focus {
+  border-color: var(--primary);
+  outline: none;
 }
 
 /* ========== Admin Panel ========== */

@@ -86,12 +86,13 @@ app.post('/api/register', async (req, res) => {
     const location = await db.lookupIP(ip);
     const user = await db.createUser(username, email, password, ip, location);
     const isAdmin = await db.isUserAdmin(user.id);
+    const isUltimateAdmin = user.is_ultimate_admin === 1;
     const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, JWT_SECRET, { expiresIn: '7d' });
     
     // Record login with location
     await db.recordLogin(user.id, ip, location);
     
-    res.json({ token, user: { ...user, isAdmin } });
+    res.json({ token, user: { ...user, isAdmin, isUltimateAdmin } });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -111,9 +112,10 @@ app.post('/api/login', async (req, res) => {
     await db.recordLogin(user.id, ip, location);
     
     const isAdmin = user.role === 'admin';
+    const isUltimateAdmin = user.is_ultimate_admin === 1;
     const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, JWT_SECRET, { expiresIn: '7d' });
     
-    res.json({ token, user: { ...user, isAdmin } });
+    res.json({ token, user: { ...user, isAdmin, isUltimateAdmin } });
   } catch (err) {
     res.status(500).json({ error: '服务器错误' });
   }
@@ -123,7 +125,8 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   const user = await db.getUserById(req.user.id);
   if (!user) return res.status(404).json({ error: '用户不存在' });
   const isAdmin = user.role === 'admin';
-  res.json({ user: { ...user, isAdmin } });
+  const isUltimateAdmin = user.is_ultimate_admin === 1;
+  res.json({ user: { ...user, isAdmin, isUltimateAdmin } });
 });
 
 // Image Upload Route
@@ -150,16 +153,20 @@ app.get('/api/rooms/all', authenticateToken, async (req, res) => {
 
 app.post('/api/rooms', authenticateToken, async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, password } = req.body;
     if (!name || name.trim().length === 0) return res.status(400).json({ error: '房间名不能为空' });
     if (name.length > 30) return res.status(400).json({ error: '房间名不能超过30个字符' });
-    const room = await db.createRoom(name.trim(), description || '', req.user.id);
+    const room = await db.createRoom(name.trim(), description || '', req.user.id, password || '');
     res.json({ room });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/rooms/:id/join', authenticateToken, async (req, res) => {
-  try { await db.joinRoom(parseInt(req.params.id), req.user.id); res.json({ success: true }); }
+  try { 
+    const isAdmin = req.user.isAdmin || await db.isUserAdmin(req.user.id);
+    await db.joinRoom(parseInt(req.params.id), req.user.id, req.body.password || '', isAdmin); 
+    res.json({ success: true }); 
+  }
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -298,6 +305,76 @@ app.post('/api/admin/rooms/:id/ban', authenticateToken, requireAdmin, async (req
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Message Recall (user can recall their own message, admin can recall any)
+app.post('/api/messages/:id/recall', authenticateToken, async (req, res) => {
+  try {
+    const messageId = parseInt(req.params.id);
+    const isAdmin = req.user.isAdmin || await db.isUserAdmin(req.user.id);
+    const msg = await db.getMessageById(messageId);
+    if (!msg) return res.status(404).json({ error: '消息不存在' });
+    if (!isAdmin && msg.user_id !== req.user.id) return res.status(403).json({ error: '只能撤回自己的消息' });
+    await db.recallMessage(messageId, msg.user_id);
+    io.to(`room:${msg.room_id}`).emit('message:recalled', { messageId, roomId: msg.room_id });
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Announcements (admin only)
+app.get('/api/announcements', authenticateToken, async (req, res) => {
+  try { res.json({ announcements: await db.getActiveAnnouncements() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/announcements', authenticateToken, requireAdmin, async (req, res) => {
+  try { res.json({ announcements: await db.getAllAnnouncements() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/announcements', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { title, content } = req.body;
+    if (!title || !content) return res.status(400).json({ error: '标题和内容不能为空' });
+    const ann = await db.createAnnouncement(title, content, req.user.id);
+    res.json({ announcement: ann });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/admin/announcements/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { title, content } = req.body;
+    if (!title || !content) return res.status(400).json({ error: '标题和内容不能为空' });
+    const ann = await db.updateAnnouncement(parseInt(req.params.id), title, content);
+    res.json({ announcement: ann });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/announcements/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await db.deleteAnnouncement(parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/announcements/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { active } = req.body;
+    await db.setAnnouncementActive(parseInt(req.params.id), active);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// User role management (admin only, cannot modify ultimate admin)
+app.post('/api/admin/users/:id/role', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { role } = req.body;
+    if (role !== 'admin' && role !== 'user') return res.status(400).json({ error: '无效的角色' });
+    if (await db.isUltimateAdmin(userId)) return res.status(403).json({ error: '无法修改最终超级管理员' });
+    await db.setUserRole(userId, role);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ========== Socket.IO ==========
 
 const onlineUsers = new Map(); // userId -> Set of socketIds
@@ -339,7 +416,9 @@ io.on('connection', async (socket) => {
 
   // ===== Socket Events =====
 
-  socket.on('join:room', async (roomId) => {
+  socket.on('join:room', async (data) => {
+    const roomId = typeof data === 'object' ? data.roomId : data;
+    const password = typeof data === 'object' ? (data.password || '') : '';
     const room = await db.getRoomById(roomId);
     if (!room) return socket.emit('error', '房间不存在');
     
@@ -347,7 +426,11 @@ io.on('connection', async (socket) => {
     const banned = await db.isRoomBanned(roomId);
     if (banned) return socket.emit('error', '该房间已被管理员禁用');
     
-    await db.joinRoom(roomId, userId);
+    // Super admin bypasses password
+    const isSuperAdmin = socket.user.role === 'admin';
+    const isMember = await db.isRoomMember(roomId, userId);
+    
+    await db.joinRoom(roomId, userId, password, isSuperAdmin);
     socket.join(`room:${roomId}`);
     const onlineInRoom = await getOnlineUsersInRoom(roomId);
     io.to(`room:${roomId}`).emit('room:online', onlineInRoom);
@@ -415,6 +498,16 @@ io.on('connection', async (socket) => {
     socket.to(`room:${roomId}`).emit('typing:update', { userId, username, action: 'stop' });
   });
 
+  socket.on('message:recall', async (messageId) => {
+    try {
+      const msg = await db.getMessageById(messageId);
+      if (!msg) return socket.emit('error', '消息不存在');
+      if (msg.user_id !== userId && socket.user.role !== 'admin') return socket.emit('error', '只能撤回自己的消息');
+      await db.recallMessage(messageId, msg.user_id);
+      io.to(`room:${msg.room_id}`).emit('message:recalled', { messageId, roomId: msg.room_id });
+    } catch (err) { socket.emit('error', err.message); }
+  });
+
   socket.on('messages:load-more', async (data) => {
     try {
       const { roomId, beforeId } = data;
@@ -425,7 +518,7 @@ io.on('connection', async (socket) => {
 
   socket.on('room:create', async (data) => {
     try {
-      const room = await db.createRoom(data.name, data.description || '', userId);
+      const room = await db.createRoom(data.name, data.description || '', userId, data.password || '');
       socket.join(`room:${room.id}`);
       socket.emit('room:created', room);
       io.emit('room:new', room);
