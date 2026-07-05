@@ -82,10 +82,15 @@ function playMessageSound() {
 
 // ========== Socket Connection ==========
 function connectSocket() {
+  if (state.socket) {
+    state.socket.removeAllListeners();
+    state.socket.close();
+    state.socket = null;
+  }
   state.socket = io({
     auth: { token: state.token },
     reconnection: true,
-    reconnectionAttempts: Infinity,
+    reconnectionAttempts: 5,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 10000,
   });
@@ -253,6 +258,16 @@ function showConnectionStatus(type, msg) {
   document.body.prepend(el);
 }
 function hideConnectionStatus() { const e = document.querySelector('.connection-status'); if (e) e.remove(); }
+
+// ========== Reconnect ==========
+function reconnect() {
+  if (state.socket) {
+    state.socket.removeAllListeners();
+    state.socket.close();
+  }
+  state.socket = null;
+  connectSocket();
+}
 
 // ========== Sidebar ==========
 function toggleSidebar() {
@@ -739,7 +754,7 @@ function initDNDButton() {
   }
 }
 
-// ========== Mobile Banner ==========
+// ========== Mobile Banner (WeChat Style) ==========
 function showMobileBanner(message) {
   if (window.innerWidth > 768) return;
   if (state.dnd) return;
@@ -749,44 +764,64 @@ function showMobileBanner(message) {
     if (existing) existing.remove();
   }
   const isRoomMsg = message.room_id !== undefined;
-  const senderName = message.senderName || message.username || message.display_name || (isRoomMsg ? '' : '');
+  const senderName = message.senderName || message.username || message.display_name || (isRoomMsg ? '' : 'Unknown');
   const contentPreview = message.type === 'image' ? '[图片]' : (message.content || '');
+  const avatarColor = message.avatar_color || message.sender_avatar_color || '#4f46e5';
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
   const banner = document.createElement('div');
   banner.className = 'mobile-banner';
-  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--gray-800);color:white;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:8px;animation:slideDown 0.3s ease;box-shadow:0 2px 8px rgba(0,0,0,0.2);cursor:pointer;';
-  
-  const iconSpan = document.createElement('span');
-  iconSpan.textContent = isRoomMsg ? '💬' : '✉️';
-  banner.appendChild(iconSpan);
-  
-  const textSpan = document.createElement('span');
-  textSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-  if (senderName) {
-    textSpan.textContent = `${senderName}: ${contentPreview}`;
-  } else {
-    textSpan.textContent = contentPreview;
-  }
-  banner.appendChild(textSpan);
-  
+
+  // Avatar circle
+  const avatar = document.createElement('div');
+  avatar.className = 'banner-avatar';
+  avatar.style.background = avatarColor;
+  avatar.textContent = senderName.charAt(0).toUpperCase();
+
+  // Content area
+  const content = document.createElement('div');
+  content.className = 'banner-content';
+  const nameLine = document.createElement('div');
+  nameLine.className = 'banner-name';
+  nameLine.textContent = senderName;
+  const textLine = document.createElement('div');
+  textLine.className = 'banner-text';
+  textLine.textContent = contentPreview;
+  content.appendChild(nameLine);
+  content.appendChild(textLine);
+
+  // Time
+  const timeEl = document.createElement('div');
+  timeEl.className = 'banner-time';
+  timeEl.textContent = timeStr;
+
+  banner.appendChild(avatar);
+  banner.appendChild(content);
+  banner.appendChild(timeEl);
+
   // Click navigates to the chat
   banner.addEventListener('click', () => {
-    if (isRoomMsg && message.room_id) {
-      switchRoom(message.room_id);
-    } else if (!isRoomMsg) {
-      const otherId = message.sender_id === state.user.id ? message.receiver_id : message.sender_id;
-      if (otherId) openPrivateChat(otherId);
-    }
-    banner.remove();
+    banner.classList.add('dismissing');
+    setTimeout(() => {
+      banner.remove();
+      if (isRoomMsg && message.room_id) {
+        switchRoom(message.room_id);
+      } else if (!isRoomMsg) {
+        const otherId = message.sender_id === state.user.id ? message.receiver_id : message.sender_id;
+        if (otherId) openPrivateChat(otherId);
+      }
+    }, 200);
   });
-  
+
   document.body.appendChild(banner);
   mobileBannerTimer = setTimeout(() => {
-    banner.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
-    banner.style.transform = 'translateY(-100%)';
-    banner.style.opacity = '0';
-    setTimeout(() => banner.remove(), 300);
-    mobileBannerTimer = null;
-  }, 1000);
+    banner.classList.add('dismissing');
+    setTimeout(() => {
+      banner.remove();
+      mobileBannerTimer = null;
+    }, 300);
+  }, 2000);
 }
 
 function handleLogout() {
@@ -1377,9 +1412,13 @@ function openPrivateChat(friendId) {
   document.getElementById('currentRoomMeta').textContent = friend.online ? '在线' : '离线';
   document.getElementById('membersBtn').style.display = 'none';
   document.getElementById('deleteRoomBtn').style.display = 'none';
-  document.getElementById('backToRoomBtn').style.display = 'flex';
-  document.getElementById('mobileBackBtn').style.display = '';
+  
+  // Show only the appropriate back button based on screen size
+  const isMobile = window.innerWidth <= 768;
+  document.getElementById('backToRoomBtn').style.display = isMobile ? 'none' : 'flex';
+  document.getElementById('mobileBackBtn').style.display = isMobile ? 'flex' : 'none';
   document.getElementById('hamburgerBtn').style.display = 'none';
+  
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('messagesContainer').style.display = 'flex';
   document.getElementById('inputArea').style.display = 'flex';
@@ -1615,6 +1654,30 @@ async function initPage() {
     };
     window.visualViewport.addEventListener('resize', setInputPosition);
   }
+
+  // Handle page visibility changes (background → foreground)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Resume AudioContext when returning to page
+      resumeAudioContext();
+      // Reconnect socket if disconnected
+      if (state.socket && !state.socket.connected) {
+        reconnect();
+      } else if (!state.socket) {
+        connectSocket();
+      }
+    }
+  });
+
+  // Handle page show events (including bfcache restore on mobile Safari)
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted || document.visibilityState === 'visible') {
+      resumeAudioContext();
+      if (!state.socket || !state.socket.connected) {
+        reconnect();
+      }
+    }
+  });
 }
 
 initPage();
