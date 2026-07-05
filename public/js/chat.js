@@ -1575,7 +1575,7 @@ function renderFriends(friends) {
     return `<div class="friend-item${isActive?' active':''}" onclick="openPrivateChat(${f.id})" data-friend-id="${f.id}">
       <div class="friend-avatar" style="background:${f.avatar_color||'#4f46e5'}">${(f.display_name||f.username).charAt(0).toUpperCase()}</div>
       <div class="friend-info">
-        <span class="friend-name">${esc(f.display_name||f.username)}${f.role==='admin'?' <span class="admin-badge" style="font-size:10px">管理</span>':''}</span>
+        <span class="friend-name">${esc(f.display_name||f.username)}${f.role==='admin'?' <span class="badge-gold" style="font-size:10px">'+(f.is_ultimate_admin===1?'终极超管':'超管')+'</span>':''}</span>
         <span class="friend-status${f.online?' online':''}">${f.online?'在线':'离线'}</span>
         ${lastMsgHtml}
       </div>
