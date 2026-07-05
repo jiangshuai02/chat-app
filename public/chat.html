@@ -109,7 +109,7 @@
         </label>
         <button class="btn-icon emoji-btn" onclick="toggleEmojiPicker()" title="表情">😊</button>
         <div class="emoji-picker" id="emojiPicker" style="display:none"><div class="emoji-grid" id="emojiGrid"></div></div>
-        <textarea id="messageInput" placeholder="输入消息..." rows="1" onfocus="resumeAudioContext()" oninput="autoResize(this); onTyping()" onkeydown="handleKeyDown(event)"></textarea>
+        <textarea id="messageInput" placeholder="输入消息..." rows="1" onfocus="resumeAudioContext();setTimeout(()=>{if(window.visualViewport)try{document.getElementById('messageInput')?.scrollIntoView({behavior:'smooth',block:'center'})}catch(e){}},400)" oninput="autoResize(this); onTyping()" onkeydown="handleKeyDown(event)"></textarea>
         <button class="btn btn-send" id="sendBtn" onclick="sendMessage()">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           <span>发送</span>

@@ -1911,33 +1911,47 @@ async function initPage() {
   loadFriends();
   showActiveAnnouncements();
 
-  // iOS Safari: keep topbar fixed and input above keyboard using visualViewport
+  // iOS Safari: keep input above keyboard using visualViewport
   if (window.visualViewport) {
-    const setVisualViewport = () => {
+    let initialViewportHeight = window.visualViewport.height;
+    const setInputPosition = () => {
       const vv = window.visualViewport;
       const inputArea = document.getElementById('inputArea');
       const chatArea = document.getElementById('chatArea');
       const emptyState = document.getElementById('emptyState');
       if (!inputArea) return;
-      const keyboardHeight = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      if (keyboardHeight > 80) {
-        inputArea.style.position = 'fixed';
-        inputArea.style.bottom = keyboardHeight + 'px';
-        inputArea.style.left = '0';
-        inputArea.style.right = '0';
-        if (chatArea) chatArea.style.bottom = (56 + keyboardHeight) + 'px';
-        if (emptyState) { emptyState.style.bottom = (56 + keyboardHeight) + 'px'; emptyState.style.top = '52px'; }
-      } else {
-        inputArea.style.position = 'fixed';
-        inputArea.style.bottom = '0';
-        inputArea.style.left = '0';
-        inputArea.style.right = '0';
-        if (chatArea) chatArea.style.bottom = '56px';
-        if (emptyState) { emptyState.style.bottom = '56px'; emptyState.style.top = '52px'; }
+      
+      // iOS: vv.offsetTop is negative when keyboard is open
+      // The visual viewport is "scrolled up" to show the focused element
+      const offset = Math.abs(Math.min(0, vv.offsetTop || 0));
+      const keyboardHeight = offset > 50 ? offset : 0;
+      
+      inputArea.style.position = 'fixed';
+      inputArea.style.bottom = keyboardHeight + 'px';
+      inputArea.style.left = '0';
+      inputArea.style.right = '0';
+      inputArea.style.zIndex = '50';
+      
+      const bottomPadding = 56 + keyboardHeight;
+      if (chatArea) {
+        chatArea.style.position = 'absolute';
+        chatArea.style.top = '52px';
+        chatArea.style.bottom = bottomPadding + 'px';
+        chatArea.style.left = '0';
+        chatArea.style.right = '0';
+      }
+      if (emptyState) {
+        emptyState.style.position = 'absolute';
+        emptyState.style.top = '52px';
+        emptyState.style.bottom = bottomPadding + 'px';
+        emptyState.style.left = '0';
+        emptyState.style.right = '0';
       }
     };
-    window.visualViewport.addEventListener('resize', setVisualViewport);
-    window.visualViewport.addEventListener('scroll', setVisualViewport);
+    window.visualViewport.addEventListener('resize', setInputPosition);
+    window.visualViewport.addEventListener('scroll', setInputPosition);
+    // Run once after init
+    setTimeout(setInputPosition, 500);
   }
 
   // Handle page visibility changes (background → foreground)
