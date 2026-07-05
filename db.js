@@ -10,7 +10,7 @@ let fetch; // loaded lazily
 // ========== PostgreSQL ==========
 async function initPostgres(databaseUrl) {
   const { Pool } = require('pg');
-  const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
+  const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false }, family: 4 });
   const client = await pool.connect();
   console.log('✅ Connected to PostgreSQL (Supabase)');
   const PG = {
