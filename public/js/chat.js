@@ -38,7 +38,6 @@ function getAudioContext() {
 }
 
 function resumeAudioContext() {
-  if (audioResumed) return;
   const ctx = getAudioContext();
   if (ctx && ctx.state === 'suspended') {
     ctx.resume().then(() => { audioResumed = true; }).catch(() => {});
@@ -65,8 +64,17 @@ function playMessageSound() {
     const ctx = getAudioContext();
     if (!ctx) return;
     if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+      ctx.resume().then(() => {
+        playBeep(ctx);
+      }).catch(() => {});
+      return;
     }
+    playBeep(ctx);
+  } catch (e) {}
+}
+
+function playBeep(ctx) {
+  try {
     const oscillator = ctx.createOscillator();
     const gain = ctx.createGain();
     oscillator.connect(gain);
@@ -1639,20 +1647,30 @@ async function initPage() {
   loadFriends();
   showActiveAnnouncements();
 
-  // iOS Safari: keep input area above keyboard using visualViewport
+  // iOS Safari: keep topbar fixed and input above keyboard using visualViewport
   if (window.visualViewport) {
-    const inputArea = document.getElementById('inputArea');
-    const setInputPosition = () => {
+    const setVisualViewport = () => {
       const vv = window.visualViewport;
-      if (vv.height < window.innerHeight) {
-        // Keyboard is open
-        const offset = window.innerHeight - (vv.height + vv.offsetTop);
-        inputArea.style.bottom = offset + 'px';
+      const inputArea = document.getElementById('inputArea');
+      const app = document.getElementById('app');
+      if (!inputArea || !app) return;
+      // Calculate keyboard height
+      const keyboardHeight = window.innerHeight - vv.height;
+      if (keyboardHeight > 50) {
+        inputArea.style.position = 'fixed';
+        inputArea.style.bottom = Math.max(0, vv.offsetTop < 0 ? 0 : keyboardHeight) + 'px';
+        inputArea.style.left = '0';
+        inputArea.style.right = '0';
+        document.body.style.height = vv.height + 'px';
       } else {
-        inputArea.style.bottom = '0';
+        inputArea.style.position = '';
+        inputArea.style.bottom = '';
+        inputArea.style.left = '';
+        inputArea.style.right = '';
+        document.body.style.height = '';
       }
     };
-    window.visualViewport.addEventListener('resize', setInputPosition);
+    window.visualViewport.addEventListener('resize', setVisualViewport);
   }
 
   // Handle page visibility changes (background → foreground)

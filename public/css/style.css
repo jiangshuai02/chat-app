@@ -1244,6 +1244,33 @@ body {
     z-index: 101;
   }
 
+  .topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+  }
+
+  #app {
+    padding-top: 56px;
+    padding-bottom: 56px;
+  }
+
+  .chat-area {
+    height: calc(100vh - 112px);
+    min-height: calc(100vh - 112px);
+    max-height: calc(100vh - 112px);
+  }
+
+  .input-area {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+  }
+
   .sidebar.open {
     left: 0;
   }
