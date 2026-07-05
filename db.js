@@ -44,11 +44,18 @@ async function initPostgres(databaseUrl) {
         databaseUrl = originalUrl.replace(oldHost, host);
         // Replace port 5432 with 6543 for pooler
         databaseUrl = databaseUrl.replace(':5432', ':6543');
-        // Add pgbouncer=true if not present
+        // Extract project ref from original hostname (e.g. "db.XXXXX.supabase.co" -> "XXXXX")
+        const parts = dbUrl.hostname.split('.');
+        const projectRef = parts.length >= 2 ? parts[1] : '';
+        if (projectRef) {
+          // Pooler requires username format: postgres.<project-ref>
+          databaseUrl = databaseUrl.replace(/\/\/([^:]+):/, `//postgres.${projectRef}:`);
+        }
+        // Add pgbouncer=true and sslmode=require if not present
         if (!databaseUrl.includes('pgbouncer=true')) {
           databaseUrl += (databaseUrl.includes('?') ? '&' : '?') + 'pgbouncer=true';
         }
-        console.log(`📡 Using pooler: ${host}:6543 (IPv4 fallback)`);
+        console.log(`📡 Using pooler: ${host}:6543 → username: postgres.${projectRef} (IPv4 fallback)`);
         resolved = true;
         break;
       } catch (e2) {
