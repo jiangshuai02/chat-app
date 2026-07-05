@@ -25,37 +25,33 @@ async function initPostgres(databaseUrl) {
     console.warn(`⚠️ DNS IPv4 lookup failed for direct host:`, e.message);
   }
 
-  // Fallback: try Supabase connection pooler (supports IPv4)
+  // Fallback: try Supabase Session Pooler (IPv4-compatible, port 5432)
   if (!resolved) {
     const dbUrl = new URL(originalUrl);
-    const projectRef = dbUrl.hostname.split('.')[0]; // e.g. "db"
-    // Try common Supabase pooler hostname patterns
-    const poolerHosts = [
+    // Extract project ref from original hostname (e.g. "db.XXXXX.supabase.co" -> "XXXXX")
+    const parts = dbUrl.hostname.split('.');
+    const projectRef = parts.length >= 2 ? parts[1] : '';
+
+    // Session pooler hostnames (port 5432) for IPv4-only networks like Render
+    const sessionPoolerHosts = [
+      'aws-1-ap-southeast-1.pooler.supabase.com',
       'aws-0-ap-southeast-1.pooler.supabase.com',
+      'aws-1-ap-southeast-2.pooler.supabase.com',
       'aws-0-ap-southeast-2.pooler.supabase.com',
+      'aws-1-us-east-1.pooler.supabase.com',
       'aws-0-us-east-1.pooler.supabase.com',
+      'aws-1-eu-west-1.pooler.supabase.com',
       'aws-0-eu-west-1.pooler.supabase.com',
     ];
-    for (const host of poolerHosts) {
+    for (const host of sessionPoolerHosts) {
       try {
         await dns.promises.lookup(host, { family: 4 });
-        // This host resolves to IPv4, use it
-        const oldHost = dbUrl.hostname;
-        databaseUrl = originalUrl.replace(oldHost, host);
-        // Replace port 5432 with 6543 for pooler
-        databaseUrl = databaseUrl.replace(':5432', ':6543');
-        // Extract project ref from original hostname (e.g. "db.XXXXX.supabase.co" -> "XXXXX")
-        const parts = dbUrl.hostname.split('.');
-        const projectRef = parts.length >= 2 ? parts[1] : '';
+        databaseUrl = originalUrl.replace(dbUrl.hostname, host);
+        // Session pooler uses same port 5432, no port replacement needed
         if (projectRef) {
-          // Pooler requires username format: postgres.<project-ref>
-          databaseUrl = databaseUrl.replace(/\/\/([^:]+):/, `//postgres.${projectRef}:`);
+          databaseUrl = databaseUrl.replace(/\/\/([^:@]+):/, `//postgres.${projectRef}:`);
         }
-        // Add pgbouncer=true and sslmode=require if not present
-        if (!databaseUrl.includes('pgbouncer=true')) {
-          databaseUrl += (databaseUrl.includes('?') ? '&' : '?') + 'pgbouncer=true';
-        }
-        console.log(`📡 Using pooler: ${host}:6543 → username: postgres.${projectRef} (IPv4 fallback)`);
+        console.log(`📡 Using session pooler: ${host}:5432 → username: postgres.${projectRef} (IPv4 fallback)`);
         resolved = true;
         break;
       } catch (e2) {
