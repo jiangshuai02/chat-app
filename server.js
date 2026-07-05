@@ -16,6 +16,18 @@ const io = new Server(server, {
 const JWT_SECRET = process.env.JWT_SECRET || 'chat-app-secret-key-2024';
 const PORT = process.env.PORT || 3000;
 
+// ========== Helpers ==========
+function formatDuration(minutes) {
+  const m = parseInt(minutes) || 0;
+  if (m <= 0) return '0分钟';
+  if (m < 60) return `${m}分钟`;
+  if (m === 60) return '1小时';
+  if (m < 1440) return `${Math.floor(m / 60)}小时`;
+  if (m === 1440) return '1天';
+  if (m < 43200) return `${Math.floor(m / 1440)}天`;
+  return `${Math.floor(m / 43200)}个月`;
+}
+
 // ========== Multer for file uploads ==========
 const multer = require('multer');
 const fs = require('fs');
@@ -282,12 +294,13 @@ app.post('/api/admin/users/:id/mute', authenticateToken, requireAdmin, async (re
     // Emit mute notice to room if scope is current room
     const mutedUser = await db.getUserById(userId);
     if (roomId && mutedUser) {
-      io.to(`room:${roomId}`).emit('user:muted', {
-        userId,
-        username: mutedUser.username || 'Unknown',
-        display_name: mutedUser.display_name,
-        durationMinutes: mins
-      });
+      // Save persistent system message so it appears in chat history
+      const mutedName = mutedUser.display_name || mutedUser.username;
+      const systemContent = `用户 ${mutedName} 因违反规定已被禁言 ${formatDuration(mins)}`;
+      const systemMsg = await db.saveMessage(roomId, req.user.id, systemContent, 'system', '');
+      if (systemMsg) {
+        io.to(`room:${roomId}`).emit('message:new', systemMsg);
+      }
     }
     res.json({ success: true, mutedUntil });
   } catch (err) { res.status(500).json({ error: err.message }); }

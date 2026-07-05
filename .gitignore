@@ -3,3 +3,4 @@ chat.db
 *.db-journal
 *.db-wal
 public/uploads/*
+server.log

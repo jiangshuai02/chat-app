@@ -29,7 +29,6 @@ const API = window.location.origin;
 
 // ========== Audio (iOS-friendly) ==========
 let audioCtx = null;
-let audioResumed = false;
 let audioEl = null;
 
 function getAudioContext() {
@@ -52,18 +51,43 @@ function getAudioElement() {
 function resumeAudioContext() {
   const ctx = getAudioContext();
   if (ctx && ctx.state === 'suspended') {
-    ctx.resume().then(() => { audioResumed = true; }).catch(() => {});
-  } else if (ctx) {
-    audioResumed = true;
+    ctx.resume().catch(() => {});
   }
+}
+
+// Prime the audio system by playing a silent buffer (iOS needs this to fully activate audio)
+function primeAudio() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx || ctx.state === 'closed') return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        try {
+          const buf = ctx.createBuffer(1, 1, 22050);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.start(0);
+        } catch(e) {}
+      }).catch(() => {});
+    } else {
+      try {
+        const buf = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+      } catch(e) {}
+    }
+  } catch(e) {}
 }
 
 function setupAudioResume() {
   const handler = () => {
     resumeAudioContext();
-    // Prime audio element on iOS (required before playback)
-    const el = getAudioElement();
-    el.play().then(() => el.pause()).catch(() => {});
+    primeAudio();
+    // Also play a silent beep to fully initialize
+    playMessageSound();
     document.removeEventListener('click', handler);
     document.removeEventListener('touchstart', handler);
     document.removeEventListener('keydown', handler);
@@ -145,8 +169,10 @@ function connectSocket() {
 
   state.socket.on('message:new', (message) => {
     const isOwn = message.user_id === state.user.id;
+    const isSystem = message.type === 'system';
     if (message.room_id === state.currentRoom?.id) { appendMessage(message); scrollToBottom(); }
     updateRoomLastMessage(message.room_id, message);
+    if (isSystem) return; // system messages don't trigger sound/notification
     if (!isOwn) {
       if (document.hidden) {
         state.missedCount++;
@@ -281,12 +307,6 @@ function connectSocket() {
   state.socket.on('admin:message-blocked', (data) => {
     if (state.isAdmin) {
       showToast(`🚫 ${data.username} 的消息被屏蔽: "${data.keyword}"`, 'error');
-    }
-  });
-
-  state.socket.on('user:muted', (data) => {
-    if (state.currentRoom) {
-      appendMuteNotice(data.userId, data.durationMinutes);
     }
   });
 
@@ -470,6 +490,16 @@ function renderMessages(msgs) { document.getElementById('messagesList').innerHTM
 function appendMessage(msg) { appendMessageToContainer(document.getElementById('messagesList'), msg); }
 
 function appendMessageToContainer(container, msg) {
+  // Render system messages (e.g., mute notice) as centered persistent banners
+  if (msg.type === 'system') {
+    const div = document.createElement('div');
+    div.className = 'system-message';
+    div.dataset.messageId = msg.id;
+    div.innerHTML = `<div class="system-message-text">${esc(msg.content)}</div>`;
+    container.appendChild(div);
+    return;
+  }
+
   const own = msg.user_id === state.user.id;
   const username = msg.display_name || msg.username || 'Unknown';
   const time = formatTime(msg.created_at);
@@ -554,7 +584,7 @@ function prependMessages(msgs) {
 function updateRoomLastMessage(roomId, msg) {
   const room = state.rooms.find(r => r.id === roomId);
   if (room) { 
-    room.last_message = msg.type === 'image' ? '[图片]' : msg.content;
+    room.last_message = msg.type === 'image' ? '[图片]' : (msg.type === 'system' ? '[系统消息]' : msg.content);
     room.last_message_user = msg.username || msg.display_name;
     renderRooms();
   }
@@ -1489,24 +1519,6 @@ function formatDuration(minutes) {
   return `${Math.floor(m/43200)}个月`;
 }
 
-// ========== Mute Notice ==========
-function appendMuteNotice(userId, durationMinutes) {
-  if (!state.currentRoom) return;
-  const container = document.getElementById('messagesList');
-  // Find the last message from this user
-  const userMessages = container.querySelectorAll(`[data-user-id="${userId}"]`);
-  if (!userMessages.length) return;
-  const lastMsg = userMessages[userMessages.length - 1];
-  // Remove any existing mute notice for this user
-  const existing = container.querySelector(`.muted-notice[data-muted-user="${userId}"]`);
-  if (existing) existing.remove();
-  const notice = document.createElement('div');
-  notice.className = 'muted-notice';
-  notice.dataset.mutedUser = userId;
-  notice.textContent = `该用户因违反规定已被禁言 ${formatDuration(durationMinutes)}`;
-  lastMsg.parentNode.insertBefore(notice, lastMsg.nextSibling);
-}
-
 // ========== Background Notifications ==========
 function requestNotificationPermission() {
   if (!('Notification' in window)) return;
@@ -1911,50 +1923,19 @@ async function initPage() {
   loadFriends();
   showActiveAnnouncements();
 
-  // iOS Safari: keyboard overlays content, use visualViewport to position input (only on mobile)
-  if (window.visualViewport && window.matchMedia('(max-width: 768px)').matches) {
-    const layoutHeight = window.innerHeight;
-    const setInputPosition = () => {
-      const vv = window.visualViewport;
-      const inputArea = document.getElementById('inputArea');
-      const chatArea = document.getElementById('chatArea');
-      const emptyState = document.getElementById('emptyState');
+  // iOS Safari: scroll to bottom when keyboard opens/resizes so latest message stays visible
+  if (window.visualViewport) {
+    const onVisualViewportChange = () => {
+      if (window.innerWidth > 768) return;
       const messagesList = document.getElementById('messagesList');
-      if (!inputArea) return;
-      
-      // With overlays-content, window.innerHeight is layout height, vv.height is visible height
-      const keyboardHeight = Math.max(0, layoutHeight - vv.height);
-      
-      inputArea.style.position = 'fixed';
-      inputArea.style.bottom = keyboardHeight + 'px';
-      inputArea.style.left = '0';
-      inputArea.style.right = '0';
-      inputArea.style.zIndex = '50';
-      
-      const bottomPadding = 56 + keyboardHeight;
-      if (chatArea) {
-        chatArea.style.position = 'absolute';
-        chatArea.style.top = '52px';
-        chatArea.style.bottom = bottomPadding + 'px';
-        chatArea.style.left = '0';
-        chatArea.style.right = '0';
-      }
-      if (emptyState) {
-        emptyState.style.position = 'absolute';
-        emptyState.style.top = '52px';
-        emptyState.style.bottom = bottomPadding + 'px';
-        emptyState.style.left = '0';
-        emptyState.style.right = '0';
-      }
-      if (messagesList) {
-        messagesList.style.paddingBottom = keyboardHeight + 'px';
-      }
+      if (!messagesList) return;
+      // Small delay to allow layout to settle, then scroll to bottom
+      setTimeout(() => {
+        messagesList.scrollTop = messagesList.scrollHeight;
+      }, 50);
     };
-    window.visualViewport.addEventListener('resize', setInputPosition);
-    window.visualViewport.addEventListener('scroll', setInputPosition);
-    // Run once after init and after keyboard transition
-    setTimeout(setInputPosition, 300);
-    setTimeout(setInputPosition, 800);
+    window.visualViewport.addEventListener('resize', onVisualViewportChange);
+    window.visualViewport.addEventListener('scroll', onVisualViewportChange);
   }
 
   // Handle page visibility changes (background → foreground)
@@ -1962,6 +1943,8 @@ async function initPage() {
     if (document.visibilityState === 'visible') {
       // Resume AudioContext when returning to page
       resumeAudioContext();
+      // Prime audio system (critical for iOS)
+      primeAudio();
       // Reconnect socket if disconnected
       if (state.socket && !state.socket.connected) {
         reconnect();
@@ -1982,6 +1965,7 @@ async function initPage() {
   window.addEventListener('pageshow', (event) => {
     if (event.persisted || document.visibilityState === 'visible') {
       resumeAudioContext();
+      primeAudio();
       if (!state.socket || !state.socket.connected) {
         reconnect();
       }
