@@ -24,17 +24,26 @@ if (!state.token || !state.user.id) window.location.href = '/';
 
 const API = window.location.origin;
 
-// ========== Audio Context (iOS-friendly) ==========
+// ========== Audio (iOS-friendly) ==========
 let audioCtx = null;
 let audioResumed = false;
+let audioEl = null;
 
 function getAudioContext() {
-  if (!audioCtx) {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!audioCtx || audioCtx.state === 'closed') {
     audioCtx = new AudioCtx();
   }
   return audioCtx;
+}
+
+function getAudioElement() {
+  if (!audioEl) {
+    audioEl = new Audio('/assets/beep.wav');
+    audioEl.volume = 0.5;
+  }
+  return audioEl;
 }
 
 function resumeAudioContext() {
@@ -46,10 +55,12 @@ function resumeAudioContext() {
   }
 }
 
-// Resume audio context on first user interaction
 function setupAudioResume() {
   const handler = () => {
     resumeAudioContext();
+    // Prime audio element on iOS (required before playback)
+    const el = getAudioElement();
+    el.play().then(() => el.pause()).catch(() => {});
     document.removeEventListener('click', handler);
     document.removeEventListener('touchstart', handler);
     document.removeEventListener('keydown', handler);
@@ -62,15 +73,16 @@ function setupAudioResume() {
 function playMessageSound() {
   try {
     const ctx = getAudioContext();
-    if (!ctx) return;
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(() => {
+    if (ctx && ctx.state !== 'closed') {
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(() => playBeep(ctx)).catch(() => playAudioElement());
+      } else {
         playBeep(ctx);
-      }).catch(() => {});
+      }
       return;
     }
-    playBeep(ctx);
-  } catch (e) {}
+    playAudioElement();
+  } catch (e) { playAudioElement(); }
 }
 
 function playBeep(ctx) {
@@ -85,6 +97,14 @@ function playBeep(ctx) {
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
     oscillator.start();
     oscillator.stop(ctx.currentTime + 0.15);
+  } catch (e) { playAudioElement(); }
+}
+
+function playAudioElement() {
+  try {
+    const el = getAudioElement();
+    el.currentTime = 0;
+    el.play().catch(() => {});
   } catch (e) {}
 }
 
@@ -1652,25 +1672,28 @@ async function initPage() {
     const setVisualViewport = () => {
       const vv = window.visualViewport;
       const inputArea = document.getElementById('inputArea');
-      const app = document.getElementById('app');
-      if (!inputArea || !app) return;
-      // Calculate keyboard height
-      const keyboardHeight = window.innerHeight - vv.height;
-      if (keyboardHeight > 50) {
+      const chatArea = document.getElementById('chatArea');
+      const emptyState = document.getElementById('emptyState');
+      if (!inputArea) return;
+      const keyboardHeight = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      if (keyboardHeight > 80) {
         inputArea.style.position = 'fixed';
-        inputArea.style.bottom = Math.max(0, vv.offsetTop < 0 ? 0 : keyboardHeight) + 'px';
+        inputArea.style.bottom = keyboardHeight + 'px';
         inputArea.style.left = '0';
         inputArea.style.right = '0';
-        document.body.style.height = vv.height + 'px';
+        if (chatArea) chatArea.style.bottom = (56 + keyboardHeight) + 'px';
+        if (emptyState) { emptyState.style.bottom = (56 + keyboardHeight) + 'px'; emptyState.style.top = '52px'; }
       } else {
-        inputArea.style.position = '';
-        inputArea.style.bottom = '';
-        inputArea.style.left = '';
-        inputArea.style.right = '';
-        document.body.style.height = '';
+        inputArea.style.position = 'fixed';
+        inputArea.style.bottom = '0';
+        inputArea.style.left = '0';
+        inputArea.style.right = '0';
+        if (chatArea) chatArea.style.bottom = '56px';
+        if (emptyState) { emptyState.style.bottom = '56px'; emptyState.style.top = '52px'; }
       }
     };
     window.visualViewport.addEventListener('resize', setVisualViewport);
+    window.visualViewport.addEventListener('scroll', setVisualViewport);
   }
 
   // Handle page visibility changes (background → foreground)

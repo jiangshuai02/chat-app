@@ -1232,6 +1232,25 @@ body {
 }
 
 @media (max-width: 768px) {
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+  }
+  #app {
+    height: 100%;
+    min-height: 100%;
+    max-height: 100%;
+    overflow: hidden;
+  }
+  .main-content {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
   .sidebar {
     position: fixed;
     left: -100%;
@@ -1243,38 +1262,7 @@ body {
     box-shadow: 4px 0 20px rgba(0,0,0,0.1);
     z-index: 101;
   }
-
-  .topbar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 50;
-  }
-
-  #app {
-    padding-top: 56px;
-    padding-bottom: 56px;
-  }
-
-  .chat-area {
-    height: calc(100vh - 112px);
-    min-height: calc(100vh - 112px);
-    max-height: calc(100vh - 112px);
-  }
-
-  .input-area {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 50;
-  }
-
-  .sidebar.open {
-    left: 0;
-  }
-
+  .sidebar.open { left: 0; }
   .sidebar-overlay.show {
     display: block;
     position: fixed;
@@ -1282,17 +1270,10 @@ body {
     background: rgba(0,0,0,0.4);
     z-index: 100;
   }
-
-  .sidebar-close {
-    display: block;
-  }
-
-  .hamburger {
-    display: inline-flex;
-  }
-
+  .sidebar-close { display: block; }
+  .hamburger { display: inline-flex; }
   .back-btn {
-    display: none; /* hidden by default, shown via JS when in private chat */
+    display: none;
     align-items: center;
     justify-content: center;
     width: 36px;
@@ -1301,103 +1282,70 @@ body {
     color: var(--gray-500);
     transition: all 0.2s;
   }
-
-  /* Hide desktop back button on mobile; only mobileBackBtn is shown */
-  #backToRoomBtn {
-    display: none !important;
-  }
-
-  .back-btn:hover {
-    background: var(--gray-100);
-    color: var(--gray-700);
-  }
-
-  .message {
-    max-width: 90%;
-  }
-
-  .auth-card {
-    padding: 24px 20px;
-  }
-
-  .emoji-picker {
-    left: 8px;
-    right: 8px;
-    max-width: none;
-  }
-
-  .main-content {
-    width: 100%;
-    min-width: 0;
-  }
-
-  /* Fixed topbar on mobile */
+  #backToRoomBtn { display: none !important; }
+  .back-btn:hover { background: var(--gray-100); color: var(--gray-700); }
   .topbar {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    z-index: 100;
     height: 52px;
+    z-index: 50;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    will-change: transform;
   }
-
-  /* Fixed input area on mobile */
-  .input-area {
+  .chat-area {
     position: fixed;
-    bottom: 0;
+    top: 52px;
     left: 0;
     right: 0;
-    z-index: 50;
-    background: white;
-    border-top: 1px solid var(--gray-200);
+    bottom: 56px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0;
   }
-
-  /* Chat area with padding so content doesn't go under fixed elements */
-  .chat-area {
-    padding-top: 52px;
-    padding-bottom: 64px;
-    flex: 1;
-    min-height: 0;
-  }
-
   .messages-container {
-    flex: 1;
-    overflow: hidden;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    padding-top: 0;
   }
-
   .messages-list {
     flex: 1;
     overflow-y: auto;
     padding: 10px;
     -webkit-overflow-scrolling: touch;
   }
-
+  .input-area {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    z-index: 50;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    will-change: transform;
+    background: white;
+    border-top: 1px solid var(--gray-200);
+  }
   .empty-state {
-    padding-top: 52px;
-    padding-bottom: 64px;
-    min-height: 100%;
-    flex: 1;
+    position: fixed;
+    inset: 52px 0 56px 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    padding: 20px 16px;
   }
-
-  /* Ensure chat area is always visible when sidebar is closed */
-  .chat-area {
-    flex: 1;
-    min-height: 0;
-  }
+  .message { max-width: 90%; }
+  .auth-card { padding: 24px 20px; }
+  .emoji-picker { left: 8px; right: 8px; max-width: none; }
 }
 
 /* Hide mobile back button on desktop */
 @media (min-width: 769px) {
-  .back-btn {
-    display: none !important;
-  }
+  .back-btn { display: none !important; }
 }
 
 @media (max-width: 480px) {
