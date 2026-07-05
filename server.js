@@ -199,6 +199,19 @@ app.get('/api/rooms/:id/messages', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Delete room: room admin or global admin can delete
+app.delete('/api/rooms/:id', authenticateToken, async (req, res) => {
+  try {
+    const roomId = parseInt(req.params.id);
+    const isAdmin = req.user.isAdmin || await db.isUserAdmin(req.user.id);
+    const isRoomAdmin = await db.isRoomAdmin(roomId, req.user.id);
+    if (!isAdmin && !isRoomAdmin) return res.status(403).json({ error: '只有房间管理员或超级管理员可以删除房间' });
+    await db.deleteRoom(roomId);
+    io.emit('room:deleted', roomId);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Friend Routes
 app.get('/api/friends', authenticateToken, async (req, res) => {
   try { res.json({ friends: await db.getFriends(req.user.id) }); }

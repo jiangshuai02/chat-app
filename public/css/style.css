@@ -1453,6 +1453,11 @@ body {
   font-size: 14px; font-weight: 600; color: white; flex-shrink: 0;
 }
 
+.delete-room-btn:hover {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
 .admin-badge {
   display: inline-block; padding: 1px 6px; border-radius: 4px;
   background: var(--primary-light); color: var(--primary); font-size: 11px;

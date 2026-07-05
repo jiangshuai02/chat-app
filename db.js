@@ -549,15 +549,29 @@ async function recordLogin(userId, ip, location) {
   }
 }
 
-async function searchUsers(query, excludeUserId) {
-  let result = await query(
-    'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username ILIKE $1 OR display_name ILIKE $1) AND id!=$2 LIMIT 20',
-    [`%${query}%`, excludeUserId]);
-  if (!result.length) {
-    // Fallback exact match for Unicode normalization issues
+async function searchUsers(q, excludeUserId) {
+  const like = `%${q}%`;
+  let result;
+  if (isPostgres) {
     result = await query(
-      'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username = $1 OR display_name = $1) AND id!=$2 LIMIT 20',
-      [query, excludeUserId]);
+      'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username ILIKE $1 OR display_name ILIKE $1) AND id!=$2 LIMIT 20',
+      [like, excludeUserId]);
+    if (!result.length) {
+      result = await query(
+        'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username = $1 OR display_name = $1) AND id!=$2 LIMIT 20',
+        [q, excludeUserId]);
+    }
+  } else {
+    // SQLite/sql.js LIKE can be unreliable with Unicode; do client-side filter
+    const all = await query(
+      'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE id!=$1 LIMIT 200',
+      [excludeUserId]);
+    const lowerQ = q.toLowerCase();
+    result = all.filter(u => {
+      const uName = (u.username || '').toLowerCase();
+      const uDisplay = (u.display_name || '').toLowerCase();
+      return uName === lowerQ || uDisplay === lowerQ || uName.includes(lowerQ) || uDisplay.includes(lowerQ);
+    }).slice(0, 20);
   }
   return result;
 }

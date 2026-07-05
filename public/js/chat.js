@@ -223,6 +223,8 @@ async function switchRoom(roomId, password = '') {
   document.getElementById('currentRoomTitle').textContent = room.name;
   document.getElementById('currentRoomMeta').textContent = `${room.member_count||0} 位成员`;
   document.getElementById('membersBtn').style.display = 'inline-flex';
+  const isRoomAdmin = room.is_room_admin || room.created_by === state.user.id;
+  document.getElementById('deleteRoomBtn').style.display = (isRoomAdmin || state.isAdmin) ? 'inline-flex' : 'none';
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('messagesContainer').style.display = 'flex';
   document.getElementById('inputArea').style.display = 'flex';
@@ -421,19 +423,28 @@ function updateTypingIndicator() {
 }
 
 // ========== Emoji Picker ==========
-function toggleEmojiPicker() {
+function toggleEmojiPicker(event) {
+  if (event) event.stopPropagation();
   const picker = document.getElementById('emojiPicker');
+  const grid = document.getElementById('emojiGrid');
   picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
-  if (picker.style.display === 'block' && !picker.hasChildNodes) {
-    const emojis = ['😀','😃','😄','😁','😅','😂','🤣','😊','😇','🙂','😉','😌','😍','🥰','😘','😗','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥴','😵','👍','👎','👊','✊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✌️','🤟','🤘','👌','❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','❤️‍🩹','💖','💗','💓','💞','🔥','⭐','✨','💫','🌟','💥','💯','🎉','🎊','🎈','🎁','🎀','🏆','🥇','🥈','🥉'];
-    document.getElementById('emojiGrid').innerHTML = emojis.map(e => `<button onclick="insertEmoji('${e}')">${e}</button>`).join('');
+  if (picker.style.display === 'block' && !grid.children.length) {
+    const emojis = ['😀','😃','😄','😁','😅','😂','🤣','😊','😇','🙂','😉','😌','😍','🥰','😘','😗','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥴','😵','👍','👎','👊','✊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✌️','🤟','🤘','👌','❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','💖','💗','💓','💞','🔥','⭐','✨','💫','🌟','💥','💯','🎉','🎊','🎈','🎁','🎀','🏆','🥇','🥈','🥉'];
+    grid.innerHTML = emojis.map(e => `<button type="button" onclick="insertEmoji('${e}')">${e}</button>`).join('');
   }
 }
-function insertEmoji(emoji) { document.getElementById('messageInput').value += emoji; document.getElementById('messageInput').focus(); toggleEmojiPicker(); }
+function insertEmoji(emoji) {
+  if (event) event.stopPropagation();
+  const input = document.getElementById('messageInput');
+  input.value += emoji;
+  input.focus();
+  autoResize(input);
+  toggleEmojiPicker();
+}
 document.addEventListener('click', (e) => {
   const picker = document.getElementById('emojiPicker');
   const btn = document.querySelector('.emoji-btn');
-  if (!picker.contains(e.target) && !btn.contains(e.target)) picker.style.display = 'none';
+  if (picker.style.display === 'block' && !picker.contains(e.target) && !btn.contains(e.target)) picker.style.display = 'none';
 });
 
 // ========== Create Room ==========
@@ -502,6 +513,27 @@ function renderMembers(members) {
     </div>`).join('');
 }
 function closeMembers() { document.getElementById('membersModal').classList.remove('show'); }
+
+async function deleteCurrentRoom() {
+  if (!state.currentRoom) return;
+  if (!confirm(`确定要删除房间 "${state.currentRoom.name}" 吗？该操作不可恢复。`)) return;
+  try {
+    const res = await fetch(`${API}/api/rooms/${state.currentRoom.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${state.token}` } });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    state.rooms = state.rooms.filter(r => r.id !== state.currentRoom.id);
+    state.currentRoom = null;
+    document.getElementById('currentRoomTitle').textContent = '选择一个房间';
+    document.getElementById('currentRoomMeta').textContent = '';
+    document.getElementById('membersBtn').style.display = 'none';
+    document.getElementById('deleteRoomBtn').style.display = 'none';
+    document.getElementById('messagesContainer').style.display = 'none';
+    document.getElementById('inputArea').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'flex';
+    renderRooms();
+    showToast('房间已删除', 'success');
+  } catch (e) { showToast('删除失败', 'error'); }
+}
+
 function updateMembersDisplay(members) {
   if (state.currentRoom) {
     const on = members.filter(m=>m.online).length;
