@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ChatApp - 聊天</title>
+  <title>Chat - 即时通讯</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -31,7 +31,7 @@
       </div>
       <div class="sidebar-search">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="roomSearch" placeholder="搜索房间、创建者..." oninput="filterRooms(this.value)">
+        <input type="text" id="roomSearch" placeholder="搜索房间、创建者..." oninput="filterRooms(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <button class="search-clear" id="searchClear" onclick="clearRoomSearch()" style="display:none">&times;</button>
       </div>
       <div class="sidebar-rooms">
@@ -66,6 +66,9 @@
           <span class="topbar-subtitle" id="currentRoomMeta"></span>
         </div>
         <div class="topbar-actions">
+          <button class="btn-icon" id="backToRoomBtn" onclick="backToRoom()" title="返回房间" style="display:none">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          </button>
           <button class="btn-icon delete-room-btn" id="deleteRoomBtn" onclick="deleteCurrentRoom()" title="删除房间" style="display:none">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
@@ -159,6 +162,7 @@
         <button class="admin-tab" data-tab="users" onclick="switchAdminTab('users')">用户管理</button>
         <button class="admin-tab" data-tab="rooms" onclick="switchAdminTab('rooms')">房间管理</button>
         <button class="admin-tab" data-tab="announcements" onclick="switchAdminTab('announcements')">公告管理</button>
+        <button class="admin-tab" data-tab="private-msgs" onclick="switchAdminTab('private-msgs')">私聊记录</button>
       </div>
       <div class="modal-body admin-body">
         <!-- Keywords Tab -->
@@ -185,6 +189,19 @@
             <button class="btn btn-primary" onclick="addAnnouncement()" style="width:100%">发布公告</button>
           </div>
           <div class="admin-list" id="announcementList"><div class="loading-spinner"></div></div>
+        </div>
+        <!-- Private Messages Tab -->
+        <div class="admin-tab-content" id="adminPrivateMsgs">
+          <div class="admin-add-row" style="flex-direction:column;gap:8px;">
+            <label style="font-size:13px;color:var(--gray-500);">选择用户查看私聊记录</label>
+            <div style="display:flex;gap:8px;">
+              <select id="adminPrivateUserSelect" style="flex:1;padding:8px 12px;border:1.5px solid var(--gray-200);border-radius:var(--radius-sm);font-size:14px;">
+                <option value="">请选择用户...</option>
+              </select>
+              <button class="btn btn-primary" onclick="loadAdminPrivateMessages()" style="width:auto;padding:8px 16px;">查看</button>
+            </div>
+          </div>
+          <div class="admin-list" id="privateMsgList"><div style="text-align:center;padding:20px;color:var(--gray-400);font-size:13px;">请选择用户查看私聊记录</div></div>
         </div>
       </div>
     </div>

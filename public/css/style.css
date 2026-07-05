@@ -493,6 +493,32 @@ a {
 
 .friend-item:hover {
   background: var(--gray-50);
+  cursor: pointer;
+}
+
+.friend-item.active {
+  background: var(--primary-light);
+}
+
+.friend-item.active .friend-name {
+  color: var(--primary);
+}
+
+.friend-remove-btn {
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.friend-item:hover .friend-remove-btn {
+  opacity: 0.6;
+}
+
+.friend-remove-btn:hover {
+  opacity: 1 !important;
+  color: var(--danger);
 }
 
 .friend-avatar {

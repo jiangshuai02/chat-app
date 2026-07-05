@@ -4,14 +4,17 @@ const state = {
   user: JSON.parse(localStorage.getItem('user') || '{}'),
   socket: null,
   currentRoom: null,
+  currentFriend: null,
   rooms: [],
   messages: new Map(),
+  privateMessages: [],
   typingUsers: new Map(),
   hasMoreMessages: new Map(),
   loadMoreIds: new Map(),
   isAdmin: false,
   isUltimateAdmin: false,
   pendingRoomPassword: null,
+  friends: [],
 };
 
 if (!state.token || !state.user.id) window.location.href = '/';
@@ -105,6 +108,25 @@ function connectSocket() {
 
   state.socket.on('friend:updated', () => {
     loadFriends();
+  });
+
+  // ===== Private Message Events =====
+  state.socket.on('private:new', (message) => {
+    const isOwn = message.sender_id === state.user.id;
+    const otherId = isOwn ? message.receiver_id : message.sender_id;
+    if (state.currentFriend && Number(state.currentFriend.id) === Number(otherId)) {
+      appendPrivateMessage(message);
+      scrollToBottom();
+    }
+    // Update friend list last message
+    if (state.friends.length > 0) {
+      loadFriends();
+    }
+    if (!isOwn) playMessageSound();
+  });
+
+  state.socket.on('private:recalled', ({ messageId }) => {
+    if (state.currentFriend) updatePrivateRecalledMessage(messageId);
   });
 
   state.socket.on('user:role-changed', (data) => {
@@ -232,11 +254,14 @@ async function switchRoom(roomId, password = '') {
   }
 
   state.currentRoom = room;
+  state.currentFriend = null;
   document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
   renderRooms();
+  renderFriends(state.friends);
   document.getElementById('currentRoomTitle').textContent = room.name;
   document.getElementById('currentRoomMeta').textContent = `${room.member_count||0} 位成员`;
   document.getElementById('membersBtn').style.display = 'inline-flex';
+  document.getElementById('backToRoomBtn').style.display = 'none';
   const isRoomAdmin = room.is_room_admin || room.created_by === state.user.id;
   document.getElementById('deleteRoomBtn').style.display = (isRoomAdmin || state.isAdmin) ? 'inline-flex' : 'none';
   document.getElementById('emptyState').style.display = 'none';
@@ -613,12 +638,14 @@ function formatTime(d) {
 function scrollToBottom() { setTimeout(() => { document.getElementById('messagesList').scrollTop = document.getElementById('messagesList').scrollHeight; }, 50); }
 function esc(t) { if (!t) return ''; const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 function showEmptyState() {
+  state.currentFriend = null;
   document.getElementById('emptyState').style.display = 'flex';
   document.getElementById('messagesContainer').style.display = 'none';
   document.getElementById('inputArea').style.display = 'none';
   document.getElementById('currentRoomTitle').textContent = '选择一个房间';
   document.getElementById('currentRoomMeta').textContent = '';
   document.getElementById('membersBtn').style.display = 'none';
+  document.getElementById('backToRoomBtn').style.display = 'none';
 }
 
 function showToast(msg, type) {
@@ -676,6 +703,7 @@ async function loadAdminData(tab) {
   else if (tab === 'users') await loadUsers();
   else if (tab === 'rooms') await loadAdminRooms();
   else if (tab === 'announcements') await loadAnnouncements();
+  else if (tab === 'private-msgs') await loadAdminPrivateUsers();
 }
 
 // ---- Keywords ----
@@ -999,6 +1027,60 @@ async function saveAnnouncement() {
 function closeEditAnnouncementModal() { document.getElementById('editAnnouncementModal').classList.remove('show'); }
 function closeAnnouncementModal() { document.getElementById('announcementModal').classList.remove('show'); }
 
+// ---- Admin: Private Messages ----
+let adminPrivateUsers = [];
+
+async function loadAdminPrivateUsers() {
+  try {
+    const res = await fetch(`${API}/api/admin/users`, { headers: { 'Authorization': `Bearer ${state.token}` } });
+    const data = await res.json();
+    adminPrivateUsers = data.users || [];
+    const select = document.getElementById('adminPrivateUserSelect');
+    select.innerHTML = '<option value="">请选择用户...</option>' + adminPrivateUsers.map(u => `<option value="${u.id}">${esc(u.display_name||u.username)} (${esc(u.email)})</option>`).join('');
+  } catch(e) { console.error(e); }
+}
+
+async function loadAdminPrivateMessages() {
+  const select = document.getElementById('adminPrivateUserSelect');
+  const userId = select.value;
+  if (!userId) { showToast('请选择用户', 'error'); return; }
+  const container = document.getElementById('privateMsgList');
+  container.innerHTML = '<div class="loading-spinner"></div>';
+  try {
+    const res = await fetch(`${API}/api/admin/private-messages/${userId}`, {
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) throw new Error('加载失败');
+    const data = await res.json();
+    const messages = data.messages || [];
+    const partners = data.partners || [];
+    
+    let html = `<div class="detail-section"><h4>聊天对象 (${partners.length})</h4>`;
+    partners.forEach(p => {
+      html += `<div class="admin-item"><div class="user-avatar-sm" style="background:${p.avatar_color||'#4f46e5'}">${(p.display_name||p.username).charAt(0).toUpperCase()}</div><div class="admin-item-info"><span class="admin-item-title">${esc(p.display_name||p.username)}</span></div></div>`;
+    });
+    html += `</div>`;
+    
+    if (!messages.length) {
+      html += '<div style="text-align:center;padding:20px;color:var(--gray-400);font-size:13px;">暂无私聊记录</div>';
+    } else {
+      html += `<div class="detail-section"><h4>私聊记录 (${messages.length})</h4>`;
+      messages.forEach(m => {
+        const isSent = Number(m.sender_id) === Number(userId);
+        const partnerName = isSent ? (m.receiver_display_name || m.receiver_username) : (m.sender_display_name || m.sender_username);
+        const direction = isSent ? '→' : '←';
+        const content = m.is_recalled ? '[已撤回]' : (m.type === 'image' ? '[图片]' : esc(m.content));
+        html += `<div class="user-msg-item"><span class="msg-room">${direction} ${esc(partnerName)}</span><span class="msg-content ${m.is_recalled ? 'recall-label' : ''}">${content}</span><span class="msg-time">${formatTime(m.created_at)}</span></div>`;
+      });
+      html += `</div>`;
+    }
+    
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = '<p style="color:var(--danger);text-align:center;">加载失败</p>';
+  }
+}
+
 async function showActiveAnnouncements() {
   try {
     const res = await fetch(`${API}/api/announcements`, { headers: { 'Authorization': `Bearer ${state.token}` } });
@@ -1044,20 +1126,26 @@ async function loadFriends() {
 }
 
 function renderFriends(friends) {
+  state.friends = friends;
   const container = document.getElementById('friendsList');
   if (!friends.length) {
     container.innerHTML = '<div style="text-align:center;padding:16px;color:var(--gray-400);font-size:12px;">暂无好友，点击上方 + 添加</div>';
     return;
   }
-  container.innerHTML = friends.map(f => `
-    <div class="friend-item">
+  container.innerHTML = friends.map(f => {
+    const isDefaultFriend = f.is_ultimate_admin === 1;
+    const isActive = state.currentFriend && Number(state.currentFriend.id) === Number(f.id);
+    return `<div class="friend-item${isActive?' active':''}" onclick="openPrivateChat(${f.id})" data-friend-id="${f.id}">
       <div class="friend-avatar" style="background:${f.avatar_color||'#4f46e5'}">${(f.display_name||f.username).charAt(0).toUpperCase()}</div>
       <div class="friend-info">
         <span class="friend-name">${esc(f.display_name||f.username)}${f.role==='admin'?' <span class="admin-badge" style="font-size:10px">管理</span>':''}</span>
         <span class="friend-status${f.online?' online':''}">${f.online?'在线':'离线'}</span>
       </div>
-    </div>
-  `).join('');
+      <button class="btn-icon friend-remove-btn" onclick="event.stopPropagation();removeFriend(${f.id})" title="删除好友" style="${isDefaultFriend?'display:none':''}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>`;
+  }).join('');
 }
 
 function renderFriendRequests(requests) {
@@ -1138,6 +1226,216 @@ async function rejectFriendRequest(requestId) {
     loadFriends();
   } catch(e) { showToast('操作失败', 'error'); }
 }
+
+// ========== Private Chat ==========
+
+function openPrivateChat(friendId) {
+  // Close private chat state for room
+  if (state.currentRoom) state.typingUsers.clear();
+  const friend = state.friends.find(f => Number(f.id) === Number(friendId));
+  if (!friend) {
+    loadFriends();
+    return;
+  }
+  state.currentFriend = friend;
+  state.currentRoom = null;
+  
+  // Update UI
+  document.getElementById('currentRoomTitle').textContent = `💬 ${esc(friend.display_name||friend.username)}`;
+  document.getElementById('currentRoomMeta').textContent = friend.online ? '在线' : '离线';
+  document.getElementById('membersBtn').style.display = 'none';
+  document.getElementById('deleteRoomBtn').style.display = 'none';
+  document.getElementById('backToRoomBtn').style.display = 'flex';
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('messagesContainer').style.display = 'flex';
+  document.getElementById('inputArea').style.display = 'flex';
+  document.getElementById('messagesList').innerHTML = '';
+  
+  renderRooms();
+  renderFriends(state.friends);
+  closeSidebar();
+  loadPrivateMessages(friendId);
+}
+
+function backToRoom() {
+  if (state.currentRoom) {
+    // Switch back to current room
+    state.currentFriend = null;
+    const room = state.currentRoom;
+    state.currentRoom = null;
+    switchRoom(room.id);
+    return;
+  }
+  state.currentFriend = null;
+  showEmptyState();
+  document.getElementById('backToRoomBtn').style.display = 'none';
+  renderFriends(state.friends);
+}
+
+async function loadPrivateMessages(friendId) {
+  try {
+    const res = await fetch(`${API}/api/private-messages/${friendId}?limit=50`, {
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) throw new Error('加载私聊消息失败');
+    const data = await res.json();
+    state.privateMessages = data.messages || [];
+    renderPrivateMessages(state.privateMessages);
+    scrollToBottom();
+  } catch(e) { showToast('加载私聊消息失败', 'error'); }
+}
+
+function renderPrivateMessages(msgs) {
+  const container = document.getElementById('messagesList');
+  container.innerHTML = '';
+  msgs.forEach(m => appendPrivateMessageToContainer(container, m));
+}
+
+function appendPrivateMessage(msg) {
+  appendPrivateMessageToContainer(document.getElementById('messagesList'), msg);
+}
+
+function appendPrivateMessageToContainer(container, msg) {
+  const own = Number(msg.sender_id) === Number(state.user.id);
+  const username = own ? (state.user.display_name || state.user.username) : (msg.sender_display_name || msg.sender_username || 'Unknown');
+  const avatarColor = own ? (state.user.avatar_color || '#4f46e5') : (msg.sender_avatar_color || '#4f46e5');
+  const time = formatTime(msg.created_at);
+  const div = document.createElement('div');
+  div.className = `message${own?' own':''}${msg.is_recalled?' recalled':''}`;
+  div.dataset.messageId = msg.id;
+  
+  const canRecall = own || state.isAdmin;
+  const recallBtn = canRecall ? `<button class="msg-recall-btn" onclick="recallPrivateMessage(${msg.id})" title="撤回">↩️</button>` : '';
+  
+  let contentHtml = '';
+  if (msg.is_recalled) {
+    contentHtml = `<div class="message-bubble recalled-bubble">消息已撤回</div>`;
+  } else if (msg.type === 'image' && msg.file_url) {
+    contentHtml = `<div class="message-image"><a href="${esc(msg.file_url)}" target="_blank"><img src="${esc(msg.file_url)}" alt="图片" loading="lazy"></a></div>${msg.content ? `<div class="message-bubble">${esc(msg.content)}</div>` : ''}`;
+  } else {
+    contentHtml = `<div class="message-bubble">${esc(msg.content)}</div>`;
+  }
+  
+  div.innerHTML = `<div class="message-avatar" style="background:${avatarColor}">${username.charAt(0).toUpperCase()}</div>
+    <div class="message-body"><div class="message-header"><span class="message-username">${esc(username)}</span><span class="message-time">${time}</span>${recallBtn}</div>
+    ${contentHtml}</div>`;
+  container.appendChild(div);
+}
+
+function updatePrivateRecalledMessage(messageId) {
+  const container = document.getElementById('messagesList');
+  const div = container.querySelector(`[data-message-id="${messageId}"]`);
+  if (div) {
+    const msg = state.privateMessages.find(m => Number(m.id) === Number(messageId));
+    if (msg) {
+      msg.is_recalled = 1;
+      const bubble = div.querySelector('.message-bubble');
+      if (bubble) {
+        bubble.className = 'message-bubble recalled-bubble';
+        bubble.textContent = '消息已撤回';
+      }
+      div.classList.add('recalled');
+    }
+  }
+}
+
+async function recallPrivateMessage(messageId) {
+  try {
+    const res = await fetch(`${API}/api/private-messages/${messageId}/recall`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    updatePrivateRecalledMessage(messageId);
+  } catch (e) { showToast('撤回失败', 'error'); }
+}
+
+async function removeFriend(friendId) {
+  if (!confirm('确定要删除该好友吗？')) return;
+  try {
+    const res = await fetch(`${API}/api/friends/${friendId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${state.token}` }
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      showToast(data.error || '删除失败', 'error');
+      return;
+    }
+    if (state.currentFriend && Number(state.currentFriend.id) === Number(friendId)) {
+      state.currentFriend = null;
+      showEmptyState();
+      document.getElementById('backToRoomBtn').style.display = 'none';
+    }
+    loadFriends();
+    showToast('已删除好友', 'success');
+  } catch(e) { showToast('删除失败', 'error'); }
+}
+
+// Override sendMessage to handle private chat
+const originalSendMessage = sendMessage;
+sendMessage = function() {
+  const input = document.getElementById('messageInput');
+  const content = input.value.trim();
+  
+  if (state.currentFriend) {
+    if (!content) return;
+    // Send via socket for private chat
+    state.socket.emit('private:send', {
+      receiverId: state.currentFriend.id,
+      content,
+      type: 'text'
+    });
+    input.value = '';
+    autoResize(input);
+    document.getElementById('sendBtn').disabled = true;
+    setTimeout(() => { document.getElementById('sendBtn').disabled = false; }, 200);
+    return;
+  }
+  originalSendMessage();
+};
+
+// Override handleImageUpload for private chat
+const originalHandleImageUpload = handleImageUpload;
+handleImageUpload = async function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('请选择图片文件', 'error');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('图片不能超过 5MB', 'error');
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('image', file);
+  
+  try {
+    showToast('正在上传图片...', 'info');
+    const res = await fetch(`${API}/api/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` },
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '上传失败');
+    
+    if (state.currentFriend) {
+      state.socket.emit('private:send', {
+        receiverId: state.currentFriend.id,
+        type: 'image',
+        fileUrl: data.url
+      });
+    } else if (state.currentRoom) {
+      state.socket.emit('message:send', { roomId: state.currentRoom.id, type: 'image', fileUrl: data.url });
+    }
+    event.target.value = '';
+  } catch (err) {
+    showToast(err.message || '上传失败', 'error');
+  }
+};
 
 // ========== Init ==========
 async function initPage() {

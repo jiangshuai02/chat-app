@@ -243,6 +243,19 @@ async function createTables() {
     CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status);
 
+    CREATE TABLE IF NOT EXISTS private_messages (
+      id SERIAL PRIMARY KEY,
+      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      receiver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type VARCHAR(20) DEFAULT 'text',
+      content TEXT DEFAULT '',
+      file_url TEXT DEFAULT '',
+      is_recalled INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_private_messages_sender ON private_messages(sender_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_private_messages_receiver ON private_messages(receiver_id, created_at);
+
     CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
     CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
@@ -335,6 +348,16 @@ function createTablesSQLite() {
       updated_at DATETIME DEFAULT (datetime('now','localtime')),
       UNIQUE(user_id, friend_id)
     );
+    CREATE TABLE IF NOT EXISTS private_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      receiver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT DEFAULT 'text',
+      content TEXT DEFAULT '',
+      file_url TEXT DEFAULT '',
+      is_recalled INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now','localtime'))
+    );
   `);
   try { L.run("CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id,created_at)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id)"); }catch(e){}
@@ -344,6 +367,8 @@ function createTablesSQLite() {
   try { L.run("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)"); }catch(e){}
   try { L.run("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at)"); }catch(e){}
+  try { L.run("CREATE INDEX IF NOT EXISTS idx_private_messages_sender ON private_messages(sender_id, created_at)"); }catch(e){}
+  try { L.run("CREATE INDEX IF NOT EXISTS idx_private_messages_receiver ON private_messages(receiver_id, created_at)"); }catch(e){}
   ensureDefaultRoomsSQLite();
 }
 
@@ -405,6 +430,18 @@ async function runMigrations() {
     )`);
     await execute("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)");
     await execute("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)");
+    await execute(`CREATE TABLE IF NOT EXISTS private_messages (
+      id SERIAL PRIMARY KEY,
+      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      receiver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type VARCHAR(20) DEFAULT 'text',
+      content TEXT DEFAULT '',
+      file_url TEXT DEFAULT '',
+      is_recalled INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await execute("CREATE INDEX IF NOT EXISTS idx_private_messages_sender ON private_messages(sender_id, created_at)");
+    await execute("CREATE INDEX IF NOT EXISTS idx_private_messages_receiver ON private_messages(receiver_id, created_at)");
   } else {
     const msgCols = db.all("PRAGMA table_info(messages)");
     const hasMsgType = msgCols.some(c => c.name === 'type');
@@ -457,6 +494,22 @@ async function runMigrations() {
       db.run("CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id, status)");
       db.run("CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id, status)");
     }
+
+    const privateMessagesExists = db.all("SELECT name FROM sqlite_master WHERE type='table' AND name='private_messages'");
+    if (!privateMessagesExists.length) {
+      db.run(`CREATE TABLE private_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        receiver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT DEFAULT 'text',
+        content TEXT DEFAULT '',
+        file_url TEXT DEFAULT '',
+        is_recalled INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT (datetime('now','localtime'))
+      )`);
+      db.run("CREATE INDEX IF NOT EXISTS idx_private_messages_sender ON private_messages(sender_id, created_at)");
+      db.run("CREATE INDEX IF NOT EXISTS idx_private_messages_receiver ON private_messages(receiver_id, created_at)");
+    }
   }
 
   // Ensure earliest user is always admin and ultimate admin (cannot be demoted)
@@ -502,6 +555,20 @@ async function createUser(username, email, password, ip, location) {
   for (const room of defaultRooms) {
     try { await execute('INSERT INTO room_members (room_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [room.id, userId]); }
     catch(e) { try { execute('INSERT OR IGNORE INTO room_members (room_id,user_id) VALUES (?,?)', [room.id, userId]); } catch(e2) {} }
+  }
+
+  // Add earliest admin (ultimate admin) as default friend (both directions)
+  try {
+    const earliestAdmin = await queryOne('SELECT id FROM users WHERE is_ultimate_admin=1 ORDER BY created_at ASC LIMIT 1');
+    if (earliestAdmin && Number(earliestAdmin.id) !== Number(userId)) {
+      const alreadyFriends = await queryOne('SELECT id FROM friends WHERE (user_id=$1 AND friend_id=$2) OR (user_id=$2 AND friend_id=$1)', [userId, earliestAdmin.id]);
+      if (!alreadyFriends) {
+        await execute('INSERT INTO friends (user_id, friend_id, status) VALUES ($1, $2, $3)', [userId, earliestAdmin.id, 'accepted']);
+        await execute('INSERT INTO friends (user_id, friend_id, status) VALUES ($1, $2, $3)', [earliestAdmin.id, userId, 'accepted']);
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Default friend creation failed:', e.message);
   }
 
   return await getUserById(userId);
@@ -937,13 +1004,110 @@ async function getFriendRequests(userId) {
 
 async function getFriends(userId) {
   return await query(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen, u.role
+    SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen, u.role, u.is_ultimate_admin
     FROM friends f JOIN users u ON u.id=f.friend_id
     WHERE f.user_id=$1 AND f.status='accepted' ORDER BY u.username ASC`, [userId]);
 }
 
 async function removeFriend(userId, friendId) {
+  // Prevent deleting the default friend (earliest admin)
+  const earliestAdmin = await queryOne('SELECT id FROM users WHERE is_ultimate_admin=1 ORDER BY created_at ASC LIMIT 1');
+  if (earliestAdmin && Number(earliestAdmin.id) === Number(friendId)) {
+    throw new Error('不能删除默认好友（系统管理员）');
+  }
   await execute('DELETE FROM friends WHERE (user_id=$1 AND friend_id=$2) OR (user_id=$2 AND friend_id=$1)', [userId, friendId]);
+}
+
+// ========== Private Messages ==========
+async function sendPrivateMessage(senderId, receiverId, content, type, fileUrl) {
+  const msgType = type || 'text';
+  const msgContent = content || '';
+  const msgFileUrl = fileUrl || '';
+  let messageId;
+  if (isPostgres) {
+    const r = await db.all('INSERT INTO private_messages (sender_id, receiver_id, type, content, file_url) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+      [senderId, receiverId, msgType, msgContent, msgFileUrl]);
+    messageId = r[0].id;
+  } else {
+    db.run('INSERT INTO private_messages (sender_id, receiver_id, type, content, file_url) VALUES (?,?,?,?,?)',
+      [senderId, receiverId, msgType, msgContent, msgFileUrl]);
+    messageId = db.lastInsertRowid;
+  }
+  return await getPrivateMessageById(messageId);
+}
+
+async function getPrivateMessageById(messageId) {
+  return await queryOne(`SELECT pm.*, u.username, u.display_name, u.avatar_color FROM private_messages pm JOIN users u ON u.id=pm.sender_id WHERE pm.id=$1`, [messageId]);
+}
+
+async function getPrivateMessages(userId, friendId, limit = 50) {
+  const r = await query(`SELECT pm.*, 
+    sender.username as sender_username, sender.display_name as sender_display_name, sender.avatar_color as sender_avatar_color,
+    receiver.username as receiver_username, receiver.display_name as receiver_display_name, receiver.avatar_color as receiver_avatar_color
+    FROM private_messages pm 
+    JOIN users sender ON sender.id=pm.sender_id
+    JOIN users receiver ON receiver.id=pm.receiver_id
+    WHERE (pm.sender_id=$1 AND pm.receiver_id=$2) OR (pm.sender_id=$2 AND pm.receiver_id=$1)
+    ORDER BY pm.created_at ASC LIMIT $3`, [userId, friendId, limit]);
+  return r;
+}
+
+async function recallPrivateMessage(messageId, userId) {
+  const msg = await getPrivateMessageById(messageId);
+  if (!msg) throw new Error('消息不存在');
+  if (msg.sender_id !== userId) throw new Error('只能撤回自己的消息');
+  if (isPostgres) {
+    await execute('UPDATE private_messages SET is_recalled=1 WHERE id=$1', [messageId]);
+  } else {
+    await execute('UPDATE private_messages SET is_recalled=1 WHERE id=$1', [messageId]);
+  }
+  return await getPrivateMessageById(messageId);
+}
+
+async function getUserPrivateChats(userId) {
+  // Returns list of friends with last private message info
+  const friends = await getFriends(userId);
+  const result = [];
+  for (const friend of friends) {
+    const lastMsg = await queryOne(`SELECT pm.*, 
+      sender.username as sender_username, sender.display_name as sender_display_name, sender.avatar_color as sender_avatar_color
+      FROM private_messages pm
+      JOIN users sender ON sender.id=pm.sender_id
+      WHERE (pm.sender_id=$1 AND pm.receiver_id=$2) OR (pm.sender_id=$2 AND pm.receiver_id=$1)
+      ORDER BY pm.created_at DESC LIMIT 1`, [userId, friend.id]);
+    result.push({
+      friend,
+      lastMessage: lastMsg || null,
+      unread: 0 // Could track unread if needed
+    });
+  }
+  return result;
+}
+
+async function getAllPrivateMessagesForAdmin(userId) {
+  // Admin can see all private messages for a user (both sent and received, with partner info)
+  const messages = await query(`SELECT pm.*,
+    sender.username as sender_username, sender.display_name as sender_display_name, sender.avatar_color as sender_avatar_color,
+    receiver.username as receiver_username, receiver.display_name as receiver_display_name, receiver.avatar_color as receiver_avatar_color
+    FROM private_messages pm
+    JOIN users sender ON sender.id=pm.sender_id
+    JOIN users receiver ON receiver.id=pm.receiver_id
+    WHERE pm.sender_id=$1 OR pm.receiver_id=$1
+    ORDER BY pm.created_at DESC LIMIT 100`, [userId]);
+
+  // Get distinct chat partners
+  const partnerIds = new Set();
+  for (const m of messages) {
+    if (m.sender_id === userId) partnerIds.add(m.receiver_id);
+    if (m.receiver_id === userId) partnerIds.add(m.sender_id);
+  }
+  const partners = [];
+  for (const pid of partnerIds) {
+    const p = await getUserById(pid);
+    if (p) partners.push(p);
+  }
+
+  return { messages, partners };
 }
 
 // ========== IP Geolocation ==========
@@ -1024,5 +1188,11 @@ module.exports = {
   getFriendRequests,
   getFriends,
   removeFriend,
+  sendPrivateMessage,
+  getPrivateMessageById,
+  getPrivateMessages,
+  recallPrivateMessage,
+  getUserPrivateChats,
+  getAllPrivateMessagesForAdmin,
   lookupIP,
 };

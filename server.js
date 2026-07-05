@@ -498,6 +498,54 @@ app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// ========== Private Messages API ==========
+
+// Send private message
+app.post('/api/private-messages', authenticateToken, async (req, res) => {
+  try {
+    const { receiverId, content, type, fileUrl } = req.body;
+    if (!receiverId) return res.status(400).json({ error: '请指定接收者' });
+    if (type !== 'image' && (!content || !content.trim())) return res.status(400).json({ error: '消息内容不能为空' });
+    const message = await db.sendPrivateMessage(req.user.id, parseInt(receiverId), content || '', type || 'text', fileUrl || '');
+    // Emit to recipient and sender
+    const sender = await db.getUserById(req.user.id);
+    io.to(`user:${receiverId}`).emit('private:new', { ...message, senderName: sender.username, senderAvatar: sender.avatar_color });
+    io.to(`user:${req.user.id}`).emit('private:new', { ...message, senderName: sender.username, senderAvatar: sender.avatar_color });
+    res.json({ message });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Get private messages with a friend
+app.get('/api/private-messages/:friendId', authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = await db.getPrivateMessages(req.user.id, parseInt(req.params.friendId), limit);
+    res.json({ messages });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Recall private message
+app.post('/api/private-messages/:id/recall', authenticateToken, async (req, res) => {
+  try {
+    const messageId = parseInt(req.params.id);
+    const msg = await db.getPrivateMessageById ? await db.getPrivateMessageById(messageId) : null;
+    // Use recallPrivateMessage which validates ownership
+    const updated = await db.recallPrivateMessage(messageId, req.user.id);
+    // Notify both parties
+    io.to(`user:${updated.sender_id}`).emit('private:recalled', { messageId, senderId: updated.sender_id, receiverId: updated.receiver_id });
+    io.to(`user:${updated.receiver_id}`).emit('private:recalled', { messageId, senderId: updated.sender_id, receiverId: updated.receiver_id });
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Admin: Get all private messages for a user
+app.get('/api/admin/private-messages/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const data = await db.getAllPrivateMessagesForAdmin(parseInt(req.params.userId));
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ========== Socket.IO ==========
 
 const onlineUsers = new Map(); // userId -> Set of socketIds
@@ -644,6 +692,22 @@ io.on('connection', async (socket) => {
       if (msg.user_id !== userId && socket.user.role !== 'admin') return socket.emit('error', '只能撤回自己的消息');
       await db.recallMessage(messageId, msg.user_id);
       io.to(`room:${msg.room_id}`).emit('message:recalled', { messageId, roomId: msg.room_id });
+    } catch (err) { socket.emit('error', err.message); }
+  });
+
+  // ===== Private Message Events =====
+  socket.on('private:send', async (data) => {
+    try {
+      const { receiverId, content, type, fileUrl } = data;
+      if (!receiverId) return socket.emit('error', '请指定接收者');
+      const msgType = type || 'text';
+      const msgContent = content ? content.trim() : '';
+      if (msgType === 'text' && (!msgContent || msgContent.length === 0)) return;
+      if (msgType === 'text' && msgContent.length > 2000) return socket.emit('error', '消息不能超过2000个字符');
+      
+      const message = await db.sendPrivateMessage(userId, parseInt(receiverId), msgContent, msgType, fileUrl || '');
+      io.to(`user:${receiverId}`).emit('private:new', { ...message, senderName: username, senderAvatar: socket.user.avatar_color });
+      io.to(`user:${userId}`).emit('private:new', { ...message, senderName: username, senderAvatar: socket.user.avatar_color });
     } catch (err) { socket.emit('error', err.message); }
   });
 
