@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ChatApp - 即时通讯</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="auth-body">
+  <div class="auth-container">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-logo">
+          <svg viewBox="0 0 40 40" width="40" height="40">
+            <rect width="40" height="40" rx="10" fill="#4f46e5"/>
+            <text x="20" y="26" text-anchor="middle" fill="white" font-size="20" font-weight="bold">C</text>
+          </svg>
+        </div>
+        <h1>ChatApp</h1>
+        <p class="auth-subtitle">连接每一个人，畅快沟通</p>
+      </div>
+
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login" onclick="switchTab('login')">登录</button>
+        <button class="auth-tab" data-tab="register" onclick="switchTab('register')">注册</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="login-form" class="auth-form active" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label for="login-username">用户名</label>
+          <input type="text" id="login-username" placeholder="输入用户名" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="login-password">密码</label>
+          <input type="password" id="login-password" placeholder="输入密码" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary" id="login-btn">
+          <span class="btn-text">登录</span>
+          <span class="btn-loader" style="display:none"></span>
+        </button>
+        <p class="auth-error" id="login-error"></p>
+      </form>
+
+      <!-- Register Form -->
+      <form id="register-form" class="auth-form" onsubmit="handleRegister(event)">
+        <div class="form-group">
+          <label for="reg-username">用户名</label>
+          <input type="text" id="reg-username" placeholder="2-20个字符" required autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="reg-email">邮箱</label>
+          <input type="email" id="reg-email" placeholder="your@email.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="reg-password">密码</label>
+          <input type="password" id="reg-password" placeholder="至少6个字符" required autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label for="reg-confirm">确认密码</label>
+          <input type="password" id="reg-confirm" placeholder="再次输入密码" required autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn btn-primary" id="register-btn">
+          <span class="btn-text">注册</span>
+          <span class="btn-loader" style="display:none"></span>
+        </button>
+        <p class="auth-error" id="register-error"></p>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/auth.js"></script>
+</body>
+</html>

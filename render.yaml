@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: chat-app
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+        value: "" # 部署时填写 Supabase 连接字符串
+      - key: NODE_VERSION
+        value: 18.18.0
