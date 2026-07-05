@@ -15,7 +15,10 @@ const state = {
   isUltimateAdmin: false,
   pendingRoomPassword: null,
   friends: [],
+  dnd: localStorage.getItem('dnd') === 'true',
 };
+
+let mobileBannerTimer = null;
 
 if (!state.token || !state.user.id) window.location.href = '/';
 
@@ -108,7 +111,7 @@ function connectSocket() {
     const isOwn = message.user_id === state.user.id;
     if (message.room_id === state.currentRoom?.id) { appendMessage(message); scrollToBottom(); }
     updateRoomLastMessage(message.room_id, message);
-    if (!isOwn) playMessageSound();
+    if (!isOwn) { playMessageSound(); showMobileBanner(message); }
   });
 
   state.socket.on('message:recalled', ({ messageId }) => {
@@ -194,7 +197,7 @@ function connectSocket() {
     if (state.friends.length > 0) {
       loadFriends();
     }
-    if (!isOwn) playMessageSound();
+    if (!isOwn) { playMessageSound(); showMobileBanner(message); }
   });
 
   state.socket.on('private:recalled', ({ messageId }) => {
@@ -711,6 +714,81 @@ function showToast(msg, type) {
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 3000);
 }
 
+// ========== Do Not Disturb ==========
+function toggleDND() {
+  state.dnd = !state.dnd;
+  localStorage.setItem('dnd', state.dnd);
+  const btn = document.getElementById('dndToggle');
+  if (state.dnd) {
+    btn.style.color = 'var(--danger)';
+    btn.style.background = 'var(--gray-100)';
+    showToast('免打扰已开启', 'info');
+  } else {
+    btn.style.color = '';
+    btn.style.background = '';
+    showToast('免打扰已关闭', 'info');
+  }
+}
+
+// Apply DND styling on init
+function initDNDButton() {
+  const btn = document.getElementById('dndToggle');
+  if (state.dnd) {
+    btn.style.color = 'var(--danger)';
+    btn.style.background = 'var(--gray-100)';
+  }
+}
+
+// ========== Mobile Banner ==========
+function showMobileBanner(message) {
+  if (window.innerWidth > 768) return;
+  if (state.dnd) return;
+  if (mobileBannerTimer) {
+    clearTimeout(mobileBannerTimer);
+    const existing = document.querySelector('.mobile-banner');
+    if (existing) existing.remove();
+  }
+  const isRoomMsg = message.room_id !== undefined;
+  const senderName = message.senderName || message.username || message.display_name || (isRoomMsg ? '' : '');
+  const contentPreview = message.type === 'image' ? '[图片]' : (message.content || '');
+  const banner = document.createElement('div');
+  banner.className = 'mobile-banner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--gray-800);color:white;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:8px;animation:slideDown 0.3s ease;box-shadow:0 2px 8px rgba(0,0,0,0.2);cursor:pointer;';
+  
+  const iconSpan = document.createElement('span');
+  iconSpan.textContent = isRoomMsg ? '💬' : '✉️';
+  banner.appendChild(iconSpan);
+  
+  const textSpan = document.createElement('span');
+  textSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  if (senderName) {
+    textSpan.textContent = `${senderName}: ${contentPreview}`;
+  } else {
+    textSpan.textContent = contentPreview;
+  }
+  banner.appendChild(textSpan);
+  
+  // Click navigates to the chat
+  banner.addEventListener('click', () => {
+    if (isRoomMsg && message.room_id) {
+      switchRoom(message.room_id);
+    } else if (!isRoomMsg) {
+      const otherId = message.sender_id === state.user.id ? message.receiver_id : message.sender_id;
+      if (otherId) openPrivateChat(otherId);
+    }
+    banner.remove();
+  });
+  
+  document.body.appendChild(banner);
+  mobileBannerTimer = setTimeout(() => {
+    banner.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+    banner.style.transform = 'translateY(-100%)';
+    banner.style.opacity = '0';
+    setTimeout(() => banner.remove(), 300);
+    mobileBannerTimer = null;
+  }, 1000);
+}
+
 function handleLogout() {
   localStorage.removeItem('token'); localStorage.removeItem('user');
   if (state.socket) state.socket.disconnect();
@@ -1187,11 +1265,13 @@ function renderFriends(friends) {
   container.innerHTML = friends.map(f => {
     const isDefaultFriend = f.is_ultimate_admin === 1;
     const isActive = state.currentFriend && Number(state.currentFriend.id) === Number(f.id);
+    const lastMsgHtml = f.last_message ? `<span class="friend-last-msg">${esc(f.last_message_user)}: ${esc(f.last_message || '')}</span>` : '';
     return `<div class="friend-item${isActive?' active':''}" onclick="openPrivateChat(${f.id})" data-friend-id="${f.id}">
       <div class="friend-avatar" style="background:${f.avatar_color||'#4f46e5'}">${(f.display_name||f.username).charAt(0).toUpperCase()}</div>
       <div class="friend-info">
         <span class="friend-name">${esc(f.display_name||f.username)}${f.role==='admin'?' <span class="admin-badge" style="font-size:10px">管理</span>':''}</span>
         <span class="friend-status${f.online?' online':''}">${f.online?'在线':'离线'}</span>
+        ${lastMsgHtml}
       </div>
       <button class="btn-icon friend-remove-btn" onclick="event.stopPropagation();removeFriend(${f.id})" title="删除好友" style="${isDefaultFriend?'display:none':''}">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1515,9 +1595,26 @@ async function initPage() {
   }
   await checkAdminStatus();
   setupAudioResume(); // Resume AudioContext on first user interaction (iOS fix)
+  initDNDButton();
   connectSocket();
   loadFriends();
   showActiveAnnouncements();
+
+  // iOS Safari: keep input area above keyboard using visualViewport
+  if (window.visualViewport) {
+    const inputArea = document.getElementById('inputArea');
+    const setInputPosition = () => {
+      const vv = window.visualViewport;
+      if (vv.height < window.innerHeight) {
+        // Keyboard is open
+        const offset = window.innerHeight - (vv.height + vv.offsetTop);
+        inputArea.style.bottom = offset + 'px';
+      } else {
+        inputArea.style.bottom = '0';
+      }
+    };
+    window.visualViewport.addEventListener('resize', setInputPosition);
+  }
 }
 
 initPage();

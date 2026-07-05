@@ -1003,10 +1003,31 @@ async function getFriendRequests(userId) {
 }
 
 async function getFriends(userId) {
-  return await query(`
+  const friends = await query(`
     SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen, u.role, u.is_ultimate_admin
     FROM friends f JOIN users u ON u.id=f.friend_id
     WHERE f.user_id=$1 AND f.status='accepted' ORDER BY u.username ASC`, [userId]);
+  // Enrich with last private message for each friend
+  for (const friend of friends) {
+    const lastMsg = await queryOne(`SELECT pm.*, 
+      sender.username as sender_username, sender.display_name as sender_display_name
+      FROM private_messages pm
+      JOIN users sender ON sender.id=pm.sender_id
+      WHERE (pm.sender_id=$1 AND pm.receiver_id=$2) OR (pm.sender_id=$2 AND pm.receiver_id=$1)
+      ORDER BY pm.created_at DESC LIMIT 1`, [userId, friend.id]);
+    if (lastMsg) {
+      friend.last_message = lastMsg.type === 'image' ? '[图片]' : (lastMsg.is_recalled ? '[已撤回]' : lastMsg.content);
+      // Determine which user's name to show as sender
+      const isFromFriend = Number(lastMsg.sender_id) === Number(friend.id);
+      friend.last_message_user = isFromFriend
+        ? (friend.display_name || friend.username)
+        : '我';
+    } else {
+      friend.last_message = null;
+      friend.last_message_user = null;
+    }
+  }
+  return friends;
 }
 
 async function removeFriend(userId, friendId) {

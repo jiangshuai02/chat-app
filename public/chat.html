@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Chat - 即时通讯</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -15,7 +15,7 @@
       <div class="sidebar-header">
         <div class="sidebar-brand">
           <svg viewBox="0 0 40 40" width="32" height="32"><rect width="40" height="40" rx="10" fill="#4f46e5"/><text x="20" y="26" text-anchor="middle" fill="white" font-size="20" font-weight="bold">C</text></svg>
-          <span>ChatApp</span>
+          <span>Chat</span>
         </div>
         <button class="sidebar-close" onclick="toggleSidebar()">&times;</button>
       </div>
@@ -25,13 +25,16 @@
           <span class="user-name" id="userName">加载中...</span>
           <span class="user-status online">在线</span>
         </div>
+        <button class="btn-icon" id="dndToggle" onclick="toggleDND()" title="消息通知">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        </button>
         <button class="btn-icon" onclick="handleLogout()" title="退出登录">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
       </div>
       <div class="sidebar-search">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="roomSearch" placeholder="搜索房间、创建者..." oninput="filterRooms(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <input type="search" id="roomSearch" name="room-search" placeholder="搜索房间、创建者..." oninput="filterRooms(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" autofill="no" readonly onfocus="this.removeAttribute('readonly')" onblur="this.setAttribute('readonly','true')">
         <button class="search-clear" id="searchClear" onclick="clearRoomSearch()" style="display:none">&times;</button>
       </div>
       <div class="sidebar-rooms">
@@ -90,7 +93,7 @@
       <div class="chat-area" id="chatArea">
         <div class="empty-state" id="emptyState">
           <svg viewBox="0 0 100 100" width="80" height="80" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="10" y="25" width="80" height="60" rx="8"/><path d="M10 35l40 25 40-25"/><circle cx="35" cy="55" r="4" fill="#94a3b8"/><circle cx="50" cy="55" r="4" fill="#94a3b8"/><circle cx="65" cy="55" r="4" fill="#94a3b8"/></svg>
-          <h3>欢迎来到 ChatApp</h3>
+          <h3>欢迎来到 Chat</h3>
           <p>从左侧选择一个房间开始聊天，或创建一个新房间</p>
         </div>
         <div class="messages-container" id="messagesContainer" style="display:none">
