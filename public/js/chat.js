@@ -156,7 +156,7 @@ function renderRooms() {
       <div class="room-avatar" style="background:${colors[room.id%colors.length]}">${room.name.charAt(0).toUpperCase()}</div>
       <div class="room-info"><div class="room-name">${esc(room.name)}</div>
         <div class="room-last-msg">${room.last_message_user?`${esc(room.last_message_user)}: ${esc(room.last_message||'')}`:'暂无消息'}</div></div>
-      <div class="room-meta"><div class="room-member-count">${room.member_count} 人</div></div>
+      <div class="room-meta"><div class="room-member-count">${room.member_count || 0} 人</div></div>
     </div>`;
   }).join('');
 }
@@ -222,9 +222,18 @@ function appendMessageToContainer(container, msg) {
   const time = formatTime(msg.created_at);
   const div = document.createElement('div');
   div.className = `message${own?' own':''}`;
+  div.dataset.messageId = msg.id;
+  
+  let contentHtml = '';
+  if (msg.type === 'image' || msg.file_url) {
+    contentHtml = `<div class="message-image"><a href="${esc(msg.file_url)}" target="_blank"><img src="${esc(msg.file_url)}" alt="图片" loading="lazy"></a></div>${msg.content ? `<div class="message-bubble">${esc(msg.content)}</div>` : ''}`;
+  } else {
+    contentHtml = `<div class="message-bubble">${esc(msg.content)}</div>`;
+  }
+  
   div.innerHTML = `<div class="message-avatar" style="background:${msg.avatar_color||'#4f46e5'}">${username.charAt(0).toUpperCase()}</div>
     <div class="message-body"><div class="message-header"><span class="message-username">${esc(username)}</span><span class="message-time">${time}</span></div>
-    <div class="message-bubble">${esc(msg.content)}</div></div>`;
+    ${contentHtml}</div>`;
   container.appendChild(div);
 }
 
@@ -243,7 +252,11 @@ function prependMessages(msgs) {
 
 function updateRoomLastMessage(roomId, msg) {
   const room = state.rooms.find(r => r.id === roomId);
-  if (room) { room.last_message = msg.content; room.last_message_user = msg.username || msg.display_name; renderRooms(); }
+  if (room) { 
+    room.last_message = msg.type === 'image' ? '[图片]' : msg.content;
+    room.last_message_user = msg.username || msg.display_name;
+    renderRooms();
+  }
 }
 
 // ========== Sending Messages ==========
@@ -251,12 +264,44 @@ async function sendMessage() {
   const input = document.getElementById('messageInput');
   const content = input.value.trim();
   if (!content || !state.currentRoom) return;
-  state.socket.emit('message:send', { roomId: state.currentRoom.id, content });
+  state.socket.emit('message:send', { roomId: state.currentRoom.id, content, type: 'text' });
   input.value = '';
   autoResize(input);
   state.socket.emit('typing:stop', state.currentRoom.id);
   document.getElementById('sendBtn').disabled = true;
   setTimeout(() => { document.getElementById('sendBtn').disabled = false; }, 200);
+}
+
+async function handleImageUpload(event) {
+  const file = event.target.files[0];
+  if (!file || !state.currentRoom) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('请选择图片文件', 'error');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('图片不能超过 5MB', 'error');
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('image', file);
+  
+  try {
+    showToast('正在上传图片...', 'info');
+    const res = await fetch(`${API}/api/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` },
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '上传失败');
+    
+    state.socket.emit('message:send', { roomId: state.currentRoom.id, type: 'image', fileUrl: data.url });
+    event.target.value = '';
+  } catch (err) {
+    showToast(err.message || '上传失败', 'error');
+  }
 }
 
 function handleKeyDown(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
@@ -477,7 +522,7 @@ function renderUsers(users) {
       <div class="user-avatar-sm" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
       <div class="admin-item-info">
         <span class="admin-item-title">${esc(u.display_name||u.username)} ${u.role==='admin'?'<span class="admin-badge">管理员</span>':''}</span>
-        <span class="admin-item-sub">${esc(u.email)} · IP: ${u.last_login_ip||'未知'} · 注册: ${u.created_at}</span>
+        <span class="admin-item-sub">${esc(u.email)} · ${u.last_login_location ? esc(u.last_login_location) : '未知位置'} · IP: ${u.last_login_ip||'未知'} · 注册: ${u.created_at}</span>
       </div>
       <div class="admin-item-actions">
         <button class="btn btn-secondary btn-sm" onclick="viewUserDetail(${u.id})">详情</button>
@@ -504,6 +549,7 @@ async function viewUserDetail(userId) {
         <tr><td>注册时间</td><td>${data.user.created_at}</td></tr>
         <tr><td>最后在线</td><td>${data.user.last_seen}</td></tr>
         <tr><td>最近IP</td><td>${data.user.last_login_ip || '未知'}</td></tr>
+        <tr><td>IP归属地</td><td>${data.user.last_login_location || '未知'}</td></tr>
         <tr><td>密码哈希</td><td style="font-size:11px;word-break:break-all;font-family:monospace;">${data.passwordHash || '无法获取'}</td></tr>
       </table>
     </div>`;
@@ -511,7 +557,7 @@ async function viewUserDetail(userId) {
     if (data.loginHistory?.length) {
       html += `<div class="detail-section"><h4>登录记录 (IP/时间)</h4>`;
       data.loginHistory.forEach(h => {
-        html += `<div class="login-record"><span class="login-ip">${h.ip_address||'未知'}</span><span class="login-time">${h.logged_in_at}</span></div>`;
+        html += `<div class="login-record"><span class="login-ip">${h.ip_address||'未知'}</span><span class="login-location">${h.location||''}</span><span class="login-time">${h.logged_in_at}</span></div>`;
       });
       html += `</div>`;
     }

@@ -16,6 +16,31 @@ const io = new Server(server, {
 const JWT_SECRET = process.env.JWT_SECRET || 'chat-app-secret-key-2024';
 const PORT = process.env.PORT || 3000;
 
+// ========== Multer for file uploads ==========
+const multer = require('multer');
+const fs = require('fs');
+
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    const name = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+    cb(null, name);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('只允许上传图片文件'));
+  }
+});
+
 // ========== Middleware ==========
 app.use(cors());
 app.use(express.json());
@@ -58,12 +83,13 @@ app.post('/api/register', async (req, res) => {
     if (!email.includes('@')) return res.status(400).json({ error: '请输入有效的邮箱地址' });
 
     const ip = getClientIp(req);
-    const user = await db.createUser(username, email, password, ip);
+    const location = await db.lookupIP(ip);
+    const user = await db.createUser(username, email, password, ip, location);
     const isAdmin = await db.isUserAdmin(user.id);
     const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, JWT_SECRET, { expiresIn: '7d' });
     
-    // Record login
-    await db.recordLogin(user.id, ip);
+    // Record login with location
+    await db.recordLogin(user.id, ip, location);
     
     res.json({ token, user: { ...user, isAdmin } });
   } catch (err) {
@@ -80,8 +106,9 @@ app.post('/api/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: '用户名或密码错误' });
 
     const ip = getClientIp(req);
-    await db.updateLastSeen(user.id, ip);
-    await db.recordLogin(user.id, ip);
+    const location = await db.lookupIP(ip);
+    await db.updateLastSeen(user.id, ip, location);
+    await db.recordLogin(user.id, ip, location);
     
     const isAdmin = user.role === 'admin';
     const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, JWT_SECRET, { expiresIn: '7d' });
@@ -97,6 +124,17 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   if (!user) return res.status(404).json({ error: '用户不存在' });
   const isAdmin = user.role === 'admin';
   res.json({ user: { ...user, isAdmin } });
+});
+
+// Image Upload Route
+app.post('/api/upload', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: '没有上传图片' });
+    const fileUrl = '/uploads/' + req.file.filename;
+    res.json({ url: fileUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Room Routes
@@ -312,9 +350,18 @@ io.on('connection', async (socket) => {
   // Send message (with filtering)
   socket.on('message:send', async (data) => {
     try {
-      const { roomId, content } = data;
-      if (!content || content.trim().length === 0) return;
-      if (content.length > 2000) return socket.emit('error', '消息不能超过2000个字符');
+      const { roomId, content, type, fileUrl } = data;
+      const msgType = type || 'text';
+      const msgContent = content ? content.trim() : '';
+      
+      if (msgType === 'text') {
+        if (!msgContent || msgContent.length === 0) return;
+        if (msgContent.length > 2000) return socket.emit('error', '消息不能超过2000个字符');
+      } else if (msgType === 'image') {
+        if (!fileUrl) return socket.emit('error', '图片链接无效');
+      } else {
+        return socket.emit('error', '不支持的消息类型');
+      }
       
       const isMember = await db.isRoomMember(roomId, userId);
       if (!isMember) return socket.emit('error', '你未加入该房间');
@@ -329,19 +376,19 @@ io.on('connection', async (socket) => {
         return socket.emit('error', `你已被禁言，解禁时间: ${mutedUntil}`);
       }
 
-      // Check keyword filter
-      const blockedKeyword = await db.checkKeywordBlocked(content.trim());
-      if (blockedKeyword) {
-        // Notify only the sender that their message was blocked
-        socket.emit('message:blocked', `消息包含违禁关键词: "${blockedKeyword}"`);
-        // Notify admins who are in this room
-        io.to(`room:${roomId}`).emit('admin:message-blocked', {
-          userId, username, content: content.trim(), keyword: blockedKeyword, roomId
-        });
-        return;
+      // Check keyword filter (only for text messages)
+      if (msgType === 'text') {
+        const blockedKeyword = await db.checkKeywordBlocked(msgContent);
+        if (blockedKeyword) {
+          socket.emit('message:blocked', `消息包含违禁关键词: "${blockedKeyword}"`);
+          io.to(`room:${roomId}`).emit('admin:message-blocked', {
+            userId, username, content: msgContent, keyword: blockedKeyword, roomId
+          });
+          return;
+        }
       }
 
-      const message = await db.saveMessage(roomId, userId, content.trim());
+      const message = await db.saveMessage(roomId, userId, msgContent, msgType, fileUrl || '');
       const user = await db.getUserById(userId);
       if (!user) return;
 

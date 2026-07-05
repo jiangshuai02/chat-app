@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const DATABASE_URL = process.env.DATABASE_URL || '';
 let db;
 let isPostgres = false;
+let fetch; // loaded lazily
 
 // ========== PostgreSQL ==========
 async function initPostgres(databaseUrl) {
@@ -80,11 +81,13 @@ async function initDatabase() {
     const r = await initPostgres(DATABASE_URL);
     db = r.PG;
     await createTables();
+    await runMigrations();
   } else {
     isPostgres = false;
     const r = await initSQLite();
     db = r.PG;
     createTablesSQLite();
+    await runMigrations();
     r.saveDb();
   }
 }
@@ -101,7 +104,8 @@ async function createTables() {
       role VARCHAR(10) DEFAULT 'user',
       created_at TIMESTAMP DEFAULT NOW(),
       last_seen TIMESTAMP DEFAULT NOW(),
-      last_login_ip VARCHAR(45) DEFAULT ''
+      last_login_ip VARCHAR(45) DEFAULT '',
+      last_login_location VARCHAR(100) DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS rooms (
@@ -125,7 +129,9 @@ async function createTables() {
       id SERIAL PRIMARY KEY,
       room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type VARCHAR(20) DEFAULT 'text',
       content TEXT NOT NULL,
+      file_url TEXT DEFAULT '',
       created_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -149,6 +155,7 @@ async function createTables() {
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       ip_address VARCHAR(45) NOT NULL,
+      location VARCHAR(100) DEFAULT '',
       logged_in_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -174,7 +181,8 @@ function createTablesSQLite() {
       role TEXT DEFAULT 'user',
       created_at DATETIME DEFAULT (datetime('now','localtime')),
       last_seen DATETIME DEFAULT (datetime('now','localtime')),
-      last_login_ip TEXT DEFAULT ''
+      last_login_ip TEXT DEFAULT '',
+      last_login_location TEXT DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS rooms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,7 +202,9 @@ function createTablesSQLite() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT DEFAULT 'text',
       content TEXT NOT NULL,
+      file_url TEXT DEFAULT '',
       created_at DATETIME DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS banned_keywords (
@@ -215,6 +225,7 @@ function createTablesSQLite() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       ip_address TEXT NOT NULL,
+      location TEXT DEFAULT '',
       logged_in_at DATETIME DEFAULT (datetime('now','localtime'))
     );
   `);
@@ -243,9 +254,34 @@ function ensureDefaultRoomsSQLite() {
   if (!ns.includes('Tech Talk')) L.run('INSERT INTO rooms (name,description,created_by) VALUES (?,?,NULL)',['Tech Talk','技术交流讨论区']);
 }
 
+// ========== Migrations for existing databases ==========
+async function runMigrations() {
+  // Messages table: add type and file_url columns
+  // Users table: add last_login_location column
+  // Login history: add location column
+  if (isPostgres) {
+    await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'text'");
+    await execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT DEFAULT ''");
+    await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_location VARCHAR(100) DEFAULT ''");
+    await execute("ALTER TABLE login_history ADD COLUMN IF NOT EXISTS location VARCHAR(100) DEFAULT ''");
+  } else {
+    const msgCols = db.all("PRAGMA table_info(messages)");
+    const hasMsgType = msgCols.some(c => c.name === 'type');
+    const hasMsgFileUrl = msgCols.some(c => c.name === 'file_url');
+    if (!hasMsgType) db.run("ALTER TABLE messages ADD COLUMN type TEXT DEFAULT 'text'");
+    if (!hasMsgFileUrl) db.run("ALTER TABLE messages ADD COLUMN file_url TEXT DEFAULT ''");
+
+    const userCols = db.all("PRAGMA table_info(users)");
+    if (!userCols.some(c => c.name === 'last_login_location')) db.run("ALTER TABLE users ADD COLUMN last_login_location TEXT DEFAULT ''");
+
+    const historyCols = db.all("PRAGMA table_info(login_history)");
+    if (!historyCols.some(c => c.name === 'location')) db.run("ALTER TABLE login_history ADD COLUMN location TEXT DEFAULT ''");
+  }
+}
+
 // ========== User Operations ==========
 
-async function createUser(username, email, password, ip) {
+async function createUser(username, email, password, ip, location) {
   const existing = await queryOne('SELECT id FROM users WHERE username=$1 OR email=$2', [username, email]);
   if (existing) throw new Error('用户名或邮箱已被注册');
 
@@ -259,12 +295,12 @@ async function createUser(username, email, password, ip) {
 
   let userId;
   if (isPostgres) {
-    const r = await db.all('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-      [username,email,hashedPassword,username,color,role,ip||'']);
+    const r = await db.all('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip,last_login_location) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+      [username,email,hashedPassword,username,color,role,ip||'',location||'']);
     userId = r[0].id;
   } else {
-    db.run('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip) VALUES (?,?,?,?,?,?,?)',
-      [username,email,hashedPassword,username,color,role,ip||'']);
+    db.run('INSERT INTO users (username,email,password,display_name,avatar_color,role,last_login_ip,last_login_location) VALUES (?,?,?,?,?,?,?,?)',
+      [username,email,hashedPassword,username,color,role,ip||'',location||'']);
     userId = db.lastInsertRowid;
   }
 
@@ -303,19 +339,19 @@ function sanitizeUser(user) {
   return safe;
 }
 
-async function updateLastSeen(userId, ip) {
+async function updateLastSeen(userId, ip, location) {
   if (isPostgres) {
-    await execute("UPDATE users SET last_seen=NOW(), last_login_ip=$2 WHERE id=$1", [userId, ip||'']);
+    await execute("UPDATE users SET last_seen=NOW(), last_login_ip=$2, last_login_location=$3 WHERE id=$1", [userId, ip||'', location||'']);
   } else {
-    await execute("UPDATE users SET last_seen=datetime('now','localtime'), last_login_ip=$2 WHERE id=$1", [userId, ip||'']);
+    await execute("UPDATE users SET last_seen=datetime('now','localtime'), last_login_ip=$2, last_login_location=$3 WHERE id=$1", [userId, ip||'', location||'']);
   }
 }
 
-async function recordLogin(userId, ip) {
+async function recordLogin(userId, ip, location) {
   if (isPostgres) {
-    await execute('INSERT INTO login_history (user_id, ip_address) VALUES ($1,$2)', [userId, ip||'']);
+    await execute('INSERT INTO login_history (user_id, ip_address, location) VALUES ($1,$2,$3)', [userId, ip||'', location||'']);
   } else {
-    await execute('INSERT INTO login_history (user_id, ip_address) VALUES ($1,$2)', [userId, ip||'']);
+    await execute('INSERT INTO login_history (user_id, ip_address, location) VALUES ($1,$2,$3)', [userId, ip||'', location||'']);
   }
 }
 
@@ -403,13 +439,15 @@ async function isRoomBanned(roomId) {
 
 // ========== Message Operations ==========
 
-async function saveMessage(roomId, userId, content) {
+async function saveMessage(roomId, userId, content, type, fileUrl) {
+  const msgType = type || 'text';
+  const msgFileUrl = fileUrl || '';
   let messageId;
   if (isPostgres) {
-    const r = await db.all('INSERT INTO messages (room_id,user_id,content) VALUES ($1,$2,$3) RETURNING id', [roomId,userId,content]);
+    const r = await db.all('INSERT INTO messages (room_id,user_id,content,type,file_url) VALUES ($1,$2,$3,$4,$5) RETURNING id', [roomId,userId,content,msgType,msgFileUrl]);
     messageId = r[0].id;
   } else {
-    db.run('INSERT INTO messages (room_id,user_id,content) VALUES (?,?,?)', [roomId,userId,content]);
+    db.run('INSERT INTO messages (room_id,user_id,content,type,file_url) VALUES (?,?,?,?,?)', [roomId,userId,content,msgType,msgFileUrl]);
     messageId = db.lastInsertRowid;
   }
   return await getMessageById(messageId);
@@ -506,7 +544,7 @@ async function isUserMuted(userId, roomId) {
 
 async function getAllUsers() {
   return await query(
-    'SELECT id,username,email,display_name,avatar_color,role,created_at,last_seen,last_login_ip FROM users ORDER BY created_at DESC');
+    'SELECT id,username,email,display_name,avatar_color,role,created_at,last_seen,last_login_ip,last_login_location FROM users ORDER BY created_at DESC');
 }
 
 async function getUserPasswordHash(userId) {
@@ -516,6 +554,28 @@ async function getUserPasswordHash(userId) {
 
 async function getLoginHistory(userId, limit=20) {
   return await query('SELECT * FROM login_history WHERE user_id=$1 ORDER BY logged_in_at DESC LIMIT $2', [userId, limit]);
+}
+
+// ========== IP Geolocation ==========
+async function lookupIP(ip) {
+  // Local / private IPs
+  if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+    return '本地网络';
+  }
+  try {
+    if (!fetch) fetch = (await import('node-fetch')).default;
+    const res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 5000 });
+    if (!res.ok) return '';
+    const data = await res.json();
+    if (data.error) return '';
+    const parts = [];
+    if (data.city) parts.push(data.city);
+    if (data.region) parts.push(data.region);
+    if (data.country_name) parts.push(data.country_name);
+    return parts.join(' ') || '';
+  } catch (e) {
+    return '';
+  }
 }
 
 module.exports = {
@@ -554,4 +614,5 @@ module.exports = {
   getAllUsers,
   getUserPasswordHash,
   getLoginHistory,
+  lookupIP,
 };

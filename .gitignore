@@ -2,3 +2,4 @@ node_modules/
 chat.db
 *.db-journal
 *.db-wal
+public/uploads/*
