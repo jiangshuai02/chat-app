@@ -1622,6 +1622,14 @@ body {
   background: #fef2f2; color: var(--danger); font-size: 11px; font-weight: 600;
 }
 
+.badge-gold {
+  display: inline-block; padding: 1px 8px; border-radius: 4px;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #78350f; font-size: 11px; font-weight: 700;
+  margin-left: 4px;
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.3);
+}
+
 .detail-section { margin-bottom: 16px; }
 .detail-section h4 { font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--gray-100); }
 
@@ -1642,6 +1650,35 @@ body {
 
 .admin-btn { color: var(--warning); }
 .admin-btn:hover { background: #fef3c7; color: #d97706; }
+
+/* ========== Mute Duration Options ========== */
+.mute-duration-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.mute-duration-btn {
+  padding: 10px 16px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+  color: var(--gray-700);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.mute-duration-btn:hover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--primary);
+}
+.mute-duration-btn.selected {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: white;
+}
 
 /* ========== Mobile Notification Banner (WeChat Style) ========== */
 @media (max-width: 768px) {

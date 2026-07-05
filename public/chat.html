@@ -255,6 +255,28 @@
     </div>
   </div>
 
+  <!-- ========== Mute Duration Modal (Avatar Click) ========== -->
+  <div class="modal-overlay" id="muteDurationModal" onclick="closeModal(event)">
+    <div class="modal modal-sm" onclick="event.stopPropagation()">
+      <div class="modal-header"><h3>选择禁言时长</h3><button class="btn-icon" onclick="closeMuteDurationModal()">&times;</button></div>
+      <div class="modal-body">
+        <p id="muteDurationLabel" style="margin-bottom:12px;font-size:14px;"></p>
+        <div class="mute-duration-options">
+          <button class="mute-duration-btn" data-minutes="15" onclick="selectMuteDuration(15)">15分钟</button>
+          <button class="mute-duration-btn" data-minutes="60" onclick="selectMuteDuration(60)">1小时</button>
+          <button class="mute-duration-btn" data-minutes="1440" onclick="selectMuteDuration(1440)">1天</button>
+          <button class="mute-duration-btn" data-minutes="10080" onclick="selectMuteDuration(10080)">1周</button>
+        </div>
+        <div class="form-group" style="margin-top:12px;">
+          <label>自定义（分钟）</label>
+          <input type="number" id="muteDurationCustom" min="1" max="43200" placeholder="输入分钟数" value="">
+        </div>
+        <p class="auth-error" id="muteDurationError"></p>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="closeMuteDurationModal()">取消</button><button class="btn btn-primary" onclick="confirmMuteDuration()">确认禁言</button></div>
+    </div>
+  </div>
+
   <!-- Announcement Popup Modal -->
   <div class="modal-overlay" id="announcementModal" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">

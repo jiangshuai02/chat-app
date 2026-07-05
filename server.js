@@ -246,7 +246,13 @@ app.delete('/api/admin/keywords/:id', authenticateToken, requireAdmin, async (re
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const users = await db.getAllUsers();
-    res.json({ users });
+    const mutedMap = await db.getMutedUsersMap();
+    const enriched = users.map(u => ({
+      ...u,
+      is_muted: !!mutedMap[String(u.id)],
+      muted_until: mutedMap[String(u.id)] || null
+    }));
+    res.json({ users: enriched });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

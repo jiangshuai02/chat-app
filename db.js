@@ -876,6 +876,20 @@ async function isUserMuted(userId, roomId) {
   return mutes.length > 0 ? mutes[0].muted_until : null;
 }
 
+async function getMutedUsersMap() {
+  let rows;
+  if (isPostgres) {
+    rows = await query("SELECT user_id, muted_until FROM muted_users WHERE room_id IS NULL AND muted_until > NOW()");
+  } else {
+    rows = await query("SELECT user_id, muted_until FROM muted_users WHERE room_id IS NULL AND muted_until > datetime('now','localtime')");
+  }
+  const map = {};
+  for (const row of rows) {
+    map[String(row.user_id)] = row.muted_until;
+  }
+  return map;
+}
+
 // ========== Admin: User/Room Info ==========
 
 async function getAllUsers() {
@@ -1191,6 +1205,7 @@ module.exports = {
   muteUser,
   unmuteUser,
   isUserMuted,
+  getMutedUsersMap,
   getAllUsers,
   getUserPasswordHash,
   getLoginHistory,

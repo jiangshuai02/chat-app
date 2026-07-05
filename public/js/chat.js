@@ -732,7 +732,7 @@ function renderMembers(members) {
     : members.map(m => {
       const isSuperAdmin = m.role === 'admin';
       const isRoomAdmin = m.is_admin;
-      const badge = isSuperAdmin ? '<span class="badge-danger">超管</span>' : (isRoomAdmin ? '<span class="admin-badge">房管</span>' : '');
+      const badge = isSuperAdmin ? '<span class="badge-gold">超管</span>' : (isRoomAdmin ? '<span class="admin-badge">房管</span>' : '');
       return `<div class="member-item" data-user-id="${m.id}">
       <div class="member-avatar" style="background:${m.avatar_color||'#4f46e5'}">${(m.display_name||m.username).charAt(0).toUpperCase()}</div>
       <div class="member-info"><div class="member-name">${esc(m.display_name||m.username)} ${badge}</div>
@@ -996,8 +996,11 @@ function renderUsers(users) {
     const roleBtn = canManageRole
       ? `<button class="btn btn-${isAdmin?'danger':'primary'} btn-sm" onclick="toggleUserRole(${u.id},'${isAdmin?'user':'admin'}')">${isAdmin?'取消管理员':'设为管理员'}</button>`
       : '';
-    const muteBtn = isUltimate ? '' : `<button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>`;
-    const badge = isUltimate ? '<span class="badge-danger">终极超管</span>' : (isAdmin ? '<span class="admin-badge">超管</span>' : '');
+    const isMuted = u.is_muted;
+    const muteBtn = isUltimate ? '' : (isMuted
+      ? `<button class="btn btn-primary btn-sm" onclick="unmuteUser(${u.id})">解除禁言</button>`
+      : `<button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>`);
+    const badge = isUltimate ? '<span class="badge-gold">终极超管</span>' : (isAdmin ? '<span class="admin-badge">超管</span>' : '');
     return `
     <div class="admin-item">
       <div class="user-avatar-sm" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
@@ -1012,6 +1015,20 @@ function renderUsers(users) {
       </div>
     </div>
   `}).join('');
+}
+
+async function unmuteUser(userId) {
+  if (!confirm('确定要解除该用户的禁言吗？')) return;
+  try {
+    const res = await fetch(`${API}/api/admin/users/${userId}/unmute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ roomId: null })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    showToast('已解除禁言', 'success');
+    await loadUsers();
+  } catch (e) { showToast('操作失败', 'error'); }
 }
 
 async function toggleUserRole(userId, newRole) {
@@ -1327,7 +1344,7 @@ function closeModal(e) { if (e.target.classList.contains('modal-overlay')) e.tar
 // Escape key
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    closeCreateRoom(); closeMembers(); closeAdminPanel(); closeUserDetail(); closeMuteModal(); closeRoomPasswordModal(); closeAnnouncementModal(); closeEditAnnouncementModal();
+    closeCreateRoom(); closeMembers(); closeAdminPanel(); closeUserDetail(); closeMuteModal(); closeMuteDurationModal(); closeRoomPasswordModal(); closeAnnouncementModal(); closeEditAnnouncementModal();
   }
 });
 
@@ -1338,7 +1355,7 @@ document.getElementById('messagesList')?.addEventListener('scroll', function() {
   }
 });
 
-// ========== Avatar Click (Add Friend / Mute) ==========
+// ========== Avatar Click (Add Friend / Mute with Duration Picker) ==========
 document.getElementById('messagesList')?.addEventListener('click', function(e) {
   const avatar = e.target.closest('.message-avatar.clickable');
   if (!avatar) return;
@@ -1351,10 +1368,13 @@ document.getElementById('messagesList')?.addEventListener('click', function(e) {
 });
 
 function handleAvatarClick(userId, username) {
-  // Super admin: directly mute for 1 hour
+  // Admin: show mute duration picker
   if (state.isAdmin) {
-    if (!confirm(`确定要禁言 ${username} 1小时吗？`)) return;
-    muteUserFromAvatar(userId, username);
+    // Cannot mute self (already checked above, but double-check)
+    if (userId === state.user.id) return;
+    // Cannot mute other admins/ultimate admins
+    // Check by looking at the user's role from friends list or state
+    showMuteDurationModal(userId, username);
     return;
   }
   // Check if already friends
@@ -1367,7 +1387,73 @@ function handleAvatarClick(userId, username) {
   sendFriendRequestFromAvatar(userId, username);
 }
 
+// ========== Mute Duration Modal ==========
+let muteDurationTargetId = null;
+let muteDurationTargetName = '';
+
+function showMuteDurationModal(userId, username) {
+  muteDurationTargetId = userId;
+  muteDurationTargetName = username;
+  document.getElementById('muteDurationLabel').textContent = `选择禁言时长 - ${username}`;
+  document.getElementById('muteDurationError').textContent = '';
+  document.getElementById('muteDurationCustom').value = '';
+  // Deselect all duration buttons
+  document.querySelectorAll('.mute-duration-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('muteDurationModal').classList.add('show');
+}
+
+function closeMuteDurationModal() {
+  document.getElementById('muteDurationModal').classList.remove('show');
+}
+
+function selectMuteDuration(minutes) {
+  document.querySelectorAll('.mute-duration-btn').forEach(b => {
+    b.classList.toggle('selected', parseInt(b.dataset.minutes) === minutes);
+  });
+  document.getElementById('muteDurationCustom').value = '';
+}
+
+async function confirmMuteDuration() {
+  const userId = muteDurationTargetId;
+  const username = muteDurationTargetName;
+  if (!userId) return;
+
+  // Check if target is self
+  if (userId === state.user.id) {
+    document.getElementById('muteDurationError').textContent = '不能禁言自己';
+    return;
+  }
+
+  // Get duration: check if a preset button is selected, otherwise use custom input
+  let durationMinutes = null;
+  const selected = document.querySelector('.mute-duration-btn.selected');
+  if (selected) {
+    durationMinutes = parseInt(selected.dataset.minutes);
+  } else {
+    const custom = parseInt(document.getElementById('muteDurationCustom').value);
+    if (custom && custom > 0) {
+      durationMinutes = custom;
+    } else {
+      document.getElementById('muteDurationError').textContent = '请选择禁言时长或输入分钟数';
+      return;
+    }
+  }
+
+  const roomId = state.currentRoom?.id || null;
+  try {
+    const res = await fetch(`${API}/api/admin/users/${userId}/mute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ roomId, durationMinutes })
+    });
+    if (!res.ok) { const d = await res.json(); document.getElementById('muteDurationError').textContent = d.error; return; }
+    showToast(`已禁言 ${username} ${durationMinutes} 分钟`, 'error');
+    closeMuteDurationModal();
+  } catch (e) { showToast('禁言失败', 'error'); }
+}
+
 async function muteUserFromAvatar(userId, username) {
+  // Legacy function - no longer used directly from avatar click
   try {
     const roomId = state.currentRoom?.id || null;
     const res = await fetch(`${API}/api/admin/users/${userId}/mute`, {
