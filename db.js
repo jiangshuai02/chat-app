@@ -635,14 +635,20 @@ async function getAllRooms(userId = null) {
       ${userJoin} as is_joined,
       ${userAdmin} as is_room_admin,
       u.username as creator_name,
-      (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
+      (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count,
+      (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) as last_message,
+      (SELECT username FROM messages m JOIN users u ON m.user_id=u.id WHERE m.room_id=r.id ORDER BY m.created_at DESC LIMIT 1) as last_message_user
+      FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
   }
   return db.all(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
     CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
     ${userJoin} as is_joined,
     ${userAdmin} as is_room_admin,
     u.username as creator_name,
-    (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
+    (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count,
+    (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) as last_message,
+    (SELECT username FROM messages m JOIN users u ON m.user_id=u.id WHERE m.room_id=r.id ORDER BY m.created_at DESC LIMIT 1) as last_message_user
+    FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
 }
 
 async function joinRoom(roomId, userId, password = '', skipPassword = false) {
@@ -669,6 +675,11 @@ async function isRoomAdmin(roomId, userId) {
 
 async function setRoomAdmin(roomId, userId, isAdmin) {
   await execute('UPDATE room_members SET is_admin=$3 WHERE room_id=$1 AND user_id=$2', [roomId, userId, isAdmin ? 1 : 0]);
+}
+
+async function getRoomMemberCount(roomId) {
+  const r = await queryOne('SELECT COUNT(*) as cnt FROM room_members WHERE room_id=$1', [roomId]);
+  return r ? Number(r.cnt) : 0;
 }
 
 async function getRoomMembers(roomId) {
@@ -975,6 +986,7 @@ module.exports = {
   joinRoom,
   leaveRoom,
   getRoomMembers,
+  getRoomMemberCount,
   isRoomMember,
   isRoomAdmin,
   setRoomAdmin,

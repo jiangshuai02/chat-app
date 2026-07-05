@@ -294,6 +294,7 @@ a {
 #app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -1255,10 +1256,18 @@ body {
 
   .chat-area {
     padding-bottom: 60px;
+    min-height: 100dvh;
+    min-height: 100vh;
   }
 
   .messages-container {
     padding-bottom: 8px;
+    flex: 1;
+  }
+
+  .main-content {
+    min-height: 100dvh;
+    min-height: 100vh;
   }
 
   .btn-send {

@@ -459,6 +459,8 @@ app.post('/api/friends/accept', authenticateToken, async (req, res) => {
   try {
     const { requestId } = req.body;
     const friend = await db.acceptFriendRequest(req.user.id, requestId);
+    io.to(`user:${req.user.id}`).emit('friend:updated');
+    io.to(`user:${friend.id}`).emit('friend:updated');
     res.json({ success: true, friend });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -524,7 +526,14 @@ io.on('connection', async (socket) => {
   if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
   onlineUsers.get(userId).add(socket.id);
 
-  await db.updateLastSeen(userId);
+  // Update IP and location on every connection
+  const clientIp = getClientIp({
+    headers: socket.handshake.headers,
+    ip: socket.handshake.address,
+    connection: { remoteAddress: socket.handshake.address }
+  });
+  const location = await db.lookupIP(clientIp);
+  await db.updateLastSeen(userId, clientIp, location);
 
   // Join user to their rooms
   const userRooms = await db.getUserRooms(userId);
@@ -555,6 +564,8 @@ io.on('connection', async (socket) => {
     socket.join(`room:${roomId}`);
     const onlineInRoom = await getOnlineUsersInRoom(roomId);
     io.to(`room:${roomId}`).emit('room:online', onlineInRoom);
+    const memberCount = await db.getRoomMemberCount(roomId);
+    io.to(`room:${roomId}`).emit('room:members-changed', { roomId, memberCount });
     await broadcastUserStatus(userId, true);
   });
 
@@ -664,6 +675,8 @@ io.on('connection', async (socket) => {
       socket.leave(`room:${roomId}`);
       const onlineInRoomLeft = await getOnlineUsersInRoom(roomId);
       io.to(`room:${roomId}`).emit('room:online', onlineInRoomLeft);
+      const memberCountLeft = await db.getRoomMemberCount(roomId);
+      io.to(`room:${roomId}`).emit('room:members-changed', { roomId, memberCount: memberCountLeft });
       socket.emit('room:left', roomId);
     } catch (err) { socket.emit('error', err.message); }
   });

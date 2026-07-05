@@ -46,8 +46,10 @@ function connectSocket() {
   });
 
   state.socket.on('message:new', (message) => {
+    const isOwn = message.user_id === state.user.id;
     if (message.room_id === state.currentRoom?.id) { appendMessage(message); scrollToBottom(); }
     updateRoomLastMessage(message.room_id, message);
+    if (!isOwn) playMessageSound();
   });
 
   state.socket.on('message:recalled', ({ messageId }) => {
@@ -80,6 +82,14 @@ function connectSocket() {
     if (document.getElementById('membersModal').classList.contains('show')) renderMembers(members);
   });
 
+  state.socket.on('room:members-changed', ({ roomId, memberCount }) => {
+    const room = state.rooms.find(r => r.id === roomId);
+    if (room) { room.member_count = memberCount; renderRooms(); }
+    if (state.currentRoom?.id === roomId) {
+      document.getElementById('currentRoomMeta').textContent = `${memberCount} 位成员`;
+    }
+  });
+
   state.socket.on('user:status', (data) => {
     if (state.currentRoom) updateRoomOnlineCount();
   });
@@ -92,6 +102,10 @@ function connectSocket() {
   });
 
   state.socket.on('error', (msg) => showToast(msg, 'error'));
+
+  state.socket.on('friend:updated', () => {
+    loadFriends();
+  });
 
   state.socket.on('user:role-changed', (data) => {
     state.user.isAdmin = data.role === 'admin';
@@ -315,11 +329,22 @@ function updateRecalledMessage(messageId) {
   const div = container.querySelector(`[data-message-id="${messageId}"]`);
   if (div && state.currentRoom) {
     const msgs = state.messages.get(state.currentRoom.id) || [];
-    const msg = msgs.find(m => m.id === messageId);
+    const msg = msgs.find(m => String(m.id) === String(messageId));
     if (msg) {
       msg.is_recalled = 1;
-      appendMessageToContainer(div.parentNode, msg);
-      div.remove();
+      // Update only bubble content, not the whole message
+      const bubble = div.querySelector('.message-bubble');
+      if (bubble) {
+        if (state.isAdmin) {
+          const original = msg.content || '';
+          bubble.className = 'message-bubble recalled-bubble';
+          bubble.innerHTML = `<span class="recall-label">[已撤回] </span>${original ? esc(original) : ''}`;
+        } else {
+          bubble.className = 'message-bubble recalled-bubble';
+          bubble.textContent = '消息已撤回';
+        }
+      }
+      div.classList.add('recalled');
     }
   }
 }
@@ -506,13 +531,41 @@ async function showRoomMembers() {
 function renderMembers(members) {
   document.getElementById('membersList').innerHTML = !members?.length
     ? '<div style="text-align:center;padding:20px;color:var(--gray-400);">暂无成员</div>'
-    : members.map(m => `<div class="member-item" data-user-id="${m.id}">
+    : members.map(m => {
+      const isSuperAdmin = m.role === 'admin';
+      const isRoomAdmin = m.is_admin;
+      const badge = isSuperAdmin ? '<span class="badge-danger">超管</span>' : (isRoomAdmin ? '<span class="admin-badge">房管</span>' : '');
+      return `<div class="member-item" data-user-id="${m.id}">
       <div class="member-avatar" style="background:${m.avatar_color||'#4f46e5'}">${(m.display_name||m.username).charAt(0).toUpperCase()}</div>
-      <div class="member-info"><div class="member-name">${esc(m.display_name||m.username)} ${m.is_admin ? '<span class="admin-badge">房间管理员</span>' : ''}</div>
-      <div class="member-status${m.online?' online':''}">${m.online?'在线':'离线'}${m.role==='admin'?' · 管理员':''}</div></div>
-    </div>`).join('');
+      <div class="member-info"><div class="member-name">${esc(m.display_name||m.username)} ${badge}</div>
+      <div class="member-status${m.online?' online':''}">${m.online?'在线':'离线'}</div></div>
+    </div>`;
+    }).join('');
 }
 function closeMembers() { document.getElementById('membersModal').classList.remove('show'); }
+function updateMembersDisplay(members) {
+  if (state.currentRoom) {
+    const on = members.filter(m=>m.online).length;
+    document.getElementById('currentRoomMeta').textContent = `${on} 人在线 · ${members.length} 位成员`;
+  }
+}
+function playMessageSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.15);
+  } catch (e) {}
+}
 
 async function deleteCurrentRoom() {
   if (!state.currentRoom) return;
@@ -684,16 +737,18 @@ function renderUsers(users) {
   if (!users.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--gray-400);">暂无用户</div>'; return; }
   container.innerHTML = users.map(u => {
     const isUltimate = u.is_ultimate_admin === 1;
+    const isAdmin = u.role === 'admin';
     const canManageRole = state.isAdmin && !isUltimate;
     const roleBtn = canManageRole
-      ? `<button class="btn btn-${u.role==='admin'?'danger':'primary'} btn-sm" onclick="toggleUserRole(${u.id},'${u.role==='admin'?'user':'admin'}')">${u.role==='admin'?'取消管理员':'设为管理员'}</button>`
+      ? `<button class="btn btn-${isAdmin?'danger':'primary'} btn-sm" onclick="toggleUserRole(${u.id},'${isAdmin?'user':'admin'}')">${isAdmin?'取消管理员':'设为管理员'}</button>`
       : '';
     const muteBtn = isUltimate ? '' : `<button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>`;
+    const badge = isUltimate ? '<span class="badge-danger">终极超管</span>' : (isAdmin ? '<span class="admin-badge">超管</span>' : '');
     return `
     <div class="admin-item">
       <div class="user-avatar-sm" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
       <div class="admin-item-info">
-        <span class="admin-item-title">${esc(u.display_name||u.username)} ${u.role==='admin'?'<span class="admin-badge">管理员</span>':''} ${isUltimate?'<span class="badge-danger">终极管理员</span>':''}</span>
+        <span class="admin-item-title">${esc(u.display_name||u.username)} ${badge}</span>
         <span class="admin-item-sub">${esc(u.email)} · ${u.last_login_location ? esc(u.last_login_location) : '未知位置'} · IP: ${u.last_login_ip||'未知'} · 最后登录: ${formatTime(u.last_seen) || '未知'} · 注册: ${u.created_at}</span>
       </div>
       <div class="admin-item-actions">
@@ -1026,6 +1081,7 @@ function showAddFriend() {
   document.getElementById('friendSearchResults').innerHTML = '';
   document.getElementById('friendError').textContent = '';
   document.getElementById('friendSearchInput').focus();
+  loadFriends(); // refresh friend list / requests when opening modal
 }
 
 function closeAddFriendModal() {
