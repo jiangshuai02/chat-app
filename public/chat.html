@@ -31,7 +31,8 @@
       </div>
       <div class="sidebar-search">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="roomSearch" placeholder="搜索房间..." oninput="filterRooms(this.value)">
+        <input type="text" id="roomSearch" placeholder="搜索房间、创建者..." oninput="filterRooms(this.value)">
+        <button class="search-clear" id="searchClear" onclick="clearRoomSearch()" style="display:none">&times;</button>
       </div>
       <div class="sidebar-rooms">
         <div class="rooms-header">

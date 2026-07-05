@@ -178,8 +178,12 @@ app.post('/api/rooms/:id/leave', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/rooms/:id/members', authenticateToken, async (req, res) => {
-  try { const members = await db.getRoomMembers(parseInt(req.params.id)); res.json({ members }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    const roomId = parseInt(req.params.id);
+    const members = await db.getRoomMembers(roomId);
+    const online = members.map(m => ({ ...m, online: onlineUsers.has(String(m.id)) }));
+    res.json({ members: online });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Message Routes
@@ -192,15 +196,6 @@ app.get('/api/rooms/:id/messages', authenticateToken, async (req, res) => {
     const beforeId = req.query.before ? parseInt(req.query.before) : null;
     const messages = await db.getRoomMessages(roomId, limit, beforeId);
     res.json({ messages });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/users/search', authenticateToken, async (req, res) => {
-  try {
-    const query = req.query.q || '';
-    if (query.length < 1) return res.json({ users: [] });
-    const users = await db.searchUsers(query, req.user.id);
-    res.json({ users });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -300,6 +295,7 @@ app.get('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 app.post('/api/admin/users/:id/mute', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
+    if (await db.isUltimateAdmin(userId)) return res.status(403).json({ error: '无法禁言最终超级管理员' });
     const { roomId, durationMinutes } = req.body;
     const mins = parseInt(durationMinutes) || 60;
     const mutedUntil = await db.muteUser(userId, roomId || null, req.user.id, mins);
@@ -414,6 +410,8 @@ app.post('/api/admin/users/:id/role', authenticateToken, requireAdmin, async (re
     if (role !== 'admin' && role !== 'user') return res.status(400).json({ error: '无效的角色' });
     if (await db.isUltimateAdmin(userId)) return res.status(403).json({ error: '无法修改最终超级管理员' });
     await db.setUserRole(userId, role);
+    // Notify the user about role change
+    io.to(`user:${userId}`).emit('user:role-changed', { role });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -426,8 +424,12 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
     const q = req.query.q || '';
     if (q.length < 1) return res.json({ users: [] });
     const users = await db.searchUsers(q, req.user.id);
+    console.log(`🔍 User search: "${q}" by user ${req.user.id}, found ${users.length} results`);
     res.json({ users });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('🔍 User search error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Send friend request
@@ -541,6 +543,13 @@ io.on('connection', async (socket) => {
     const onlineInRoom = await getOnlineUsersInRoom(roomId);
     io.to(`room:${roomId}`).emit('room:online', onlineInRoom);
     await broadcastUserStatus(userId, true);
+  });
+
+  socket.on('room:get-online', async (roomId) => {
+    try {
+      const onlineInRoom = await getOnlineUsersInRoom(roomId);
+      socket.emit('room:online', onlineInRoom);
+    } catch (err) { socket.emit('error', err.message); }
   });
 
   // Send message (with filtering)

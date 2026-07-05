@@ -550,9 +550,16 @@ async function recordLogin(userId, ip, location) {
 }
 
 async function searchUsers(query, excludeUserId) {
-  return await query(
+  let result = await query(
     'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username ILIKE $1 OR display_name ILIKE $1) AND id!=$2 LIMIT 20',
     [`%${query}%`, excludeUserId]);
+  if (!result.length) {
+    // Fallback exact match for Unicode normalization issues
+    result = await query(
+      'SELECT id,username,display_name,avatar_color,last_seen FROM users WHERE (username = $1 OR display_name = $1) AND id!=$2 LIMIT 20',
+      [query, excludeUserId]);
+  }
+  return result;
 }
 
 async function isUserAdmin(userId) {
@@ -596,10 +603,12 @@ async function getUserRooms(userId) {
     SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
            CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
            rm.joined_at, rm.is_admin as is_room_admin,
+           u.username as creator_name,
       (SELECT COUNT(*) FROM room_members WHERE room_id=r.id)::int as member_count,
       (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) as last_message,
       (SELECT username FROM messages m JOIN users u ON m.user_id=u.id WHERE m.room_id=r.id ORDER BY m.created_at DESC LIMIT 1) as last_message_user
     FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$1
+    LEFT JOIN users u ON u.id=r.created_by
     ORDER BY rm.joined_at DESC`, [userId]);
 }
 
@@ -611,13 +620,15 @@ async function getAllRooms(userId = null) {
       CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
       ${userJoin} as is_joined,
       ${userAdmin} as is_room_admin,
-      (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
+      u.username as creator_name,
+      (SELECT COUNT(*)::int FROM room_members WHERE room_id=r.id) as member_count FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
   }
   return db.all(`SELECT r.id, r.name, r.description, r.created_by, r.created_at, r.is_banned,
     CASE WHEN r.password <> '' THEN 1 ELSE 0 END as has_password,
     ${userJoin} as is_joined,
     ${userAdmin} as is_room_admin,
-    (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r ORDER BY r.created_at ASC`);
+    u.username as creator_name,
+    (SELECT COUNT(*) FROM room_members WHERE room_id=r.id) as member_count FROM rooms r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.created_at ASC`);
 }
 
 async function joinRoom(roomId, userId, password = '', skipPassword = false) {

@@ -93,6 +93,19 @@ function connectSocket() {
 
   state.socket.on('error', (msg) => showToast(msg, 'error'));
 
+  state.socket.on('user:role-changed', (data) => {
+    state.user.isAdmin = data.role === 'admin';
+    state.isAdmin = data.role === 'admin';
+    localStorage.setItem('user', JSON.stringify({ ...state.user, isAdmin: state.isAdmin }));
+    if (data.role === 'admin') {
+      showToast('🎉 你已被提升为超级管理员', 'success');
+      document.getElementById('adminBtn').style.display = 'inline-flex';
+    } else {
+      showToast('你的管理员权限已被取消', 'error');
+      document.getElementById('adminBtn').style.display = 'none';
+    }
+  });
+
   // ===== Admin Socket Events =====
   state.socket.on('message:blocked', (msg) => showToast(msg, 'error'));
   
@@ -149,8 +162,13 @@ async function loadRooms() {
 
 function renderRooms() {
   const container = document.getElementById('roomsList');
-  const q = (document.getElementById('roomSearch')?.value || '').toLowerCase();
-  let filtered = q ? state.rooms.filter(r => r.name.toLowerCase().includes(q)) : state.rooms;
+  const q = (document.getElementById('roomSearch')?.value || '').toLowerCase().trim();
+  let filtered = q ? state.rooms.filter(r => {
+    const search = q;
+    return (r.name && r.name.toLowerCase().includes(search)) ||
+           (r.description && r.description.toLowerCase().includes(search)) ||
+           (r.creator_name && r.creator_name.toLowerCase().includes(search));
+  }) : state.rooms;
   if (!filtered.length) {
     container.innerHTML = `<div style="text-align:center;padding:24px;color:var(--gray-400);font-size:13px;">${q?'没有匹配的房间':'暂无房间，点击上方 + 创建一个'}</div>`;
     return;
@@ -172,7 +190,16 @@ function renderRooms() {
   }).join('');
 }
 
-function filterRooms(q) { renderRooms(); }
+function filterRooms(q) {
+  const clearBtn = document.getElementById('searchClear');
+  if (clearBtn) clearBtn.style.display = q ? 'inline-flex' : 'none';
+  renderRooms();
+}
+
+function clearRoomSearch() {
+  document.getElementById('roomSearch').value = '';
+  filterRooms('');
+}
 
 async function switchRoom(roomId, password = '') {
   if (state.currentRoom?.id === roomId) return;
@@ -461,6 +488,8 @@ async function showRoomMembers() {
     const res = await fetch(`${API}/api/rooms/${state.currentRoom.id}/members`, { headers: { 'Authorization': `Bearer ${state.token}` } });
     const data = await res.json();
     renderMembers(data.members || []);
+    // Also request fresh online status via socket
+    state.socket.emit('room:get-online', state.currentRoom.id);
   } catch(e) { console.error(e); }
 }
 function renderMembers(members) {
@@ -627,16 +656,17 @@ function renderUsers(users) {
     const roleBtn = canManageRole
       ? `<button class="btn btn-${u.role==='admin'?'danger':'primary'} btn-sm" onclick="toggleUserRole(${u.id},'${u.role==='admin'?'user':'admin'}')">${u.role==='admin'?'取消管理员':'设为管理员'}</button>`
       : '';
+    const muteBtn = isUltimate ? '' : `<button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>`;
     return `
     <div class="admin-item">
       <div class="user-avatar-sm" style="background:${u.avatar_color||'#4f46e5'}">${(u.display_name||u.username).charAt(0).toUpperCase()}</div>
       <div class="admin-item-info">
         <span class="admin-item-title">${esc(u.display_name||u.username)} ${u.role==='admin'?'<span class="admin-badge">管理员</span>':''} ${isUltimate?'<span class="badge-danger">终极管理员</span>':''}</span>
-        <span class="admin-item-sub">${esc(u.email)} · ${u.last_login_location ? esc(u.last_login_location) : '未知位置'} · IP: ${u.last_login_ip||'未知'} · 注册: ${u.created_at}</span>
+        <span class="admin-item-sub">${esc(u.email)} · ${u.last_login_location ? esc(u.last_login_location) : '未知位置'} · IP: ${u.last_login_ip||'未知'} · 最后登录: ${formatTime(u.last_seen) || '未知'} · 注册: ${u.created_at}</span>
       </div>
       <div class="admin-item-actions">
         <button class="btn btn-secondary btn-sm" onclick="viewUserDetail(${u.id})">详情</button>
-        <button class="btn btn-danger btn-sm" onclick="showMuteModal(${u.id},'${esc(u.username)}')">禁言</button>
+        ${muteBtn}
         ${roleBtn}
       </div>
     </div>
@@ -972,7 +1002,7 @@ function closeAddFriendModal() {
 
 async function searchUsersForFriend(q) {
   const results = document.getElementById('friendSearchResults');
-  if (q.length < 2) { results.innerHTML = ''; return; }
+  if (q.length < 1) { results.innerHTML = ''; return; }
   try {
     const res = await fetch(`${API}/api/users/search?q=${encodeURIComponent(q)}`, { headers: { 'Authorization': `Bearer ${state.token}` } });
     const data = await res.json();
