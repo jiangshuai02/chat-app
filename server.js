@@ -302,13 +302,20 @@ app.post('/api/admin/rooms/:id/ban', authenticateToken, requireAdmin, async (req
 
 const onlineUsers = new Map(); // userId -> Set of socketIds
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
   if (!token) return next(new Error('未提供认证令牌'));
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
     if (err) return next(new Error('令牌无效'));
-    socket.user = decoded;
-    next();
+    // Verify user still exists in database (handles database resets/switches)
+    try {
+      const user = await db.getUserById(decoded.id);
+      if (!user) return next(new Error('用户不存在，请重新登录'));
+      socket.user = { ...decoded, ...user };
+      next();
+    } catch (e) {
+      next(new Error('认证验证失败'));
+    }
   });
 });
 
@@ -422,7 +429,12 @@ io.on('connection', async (socket) => {
       socket.join(`room:${room.id}`);
       socket.emit('room:created', room);
       io.emit('room:new', room);
-    } catch (err) { socket.emit('error', err.message); }
+    } catch (err) {
+      const msg = err.message?.includes('foreign key constraint') || err.message?.includes('created_by')
+        ? '用户数据异常，请退出后重新登录注册'
+        : err.message;
+      socket.emit('error', msg);
+    }
   });
 
   socket.on('room:leave', async (roomId) => {
