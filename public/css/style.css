@@ -847,6 +847,15 @@ a {
   margin-top: 2px;
 }
 
+.message-avatar.clickable {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.message-avatar.clickable:hover {
+  opacity: 0.75;
+}
+
 .message-body {
   display: flex;
   flex-direction: column;
@@ -1464,6 +1473,35 @@ body {
   color: var(--gray-400);
   font-size: 12px;
   padding: 4px 8px;
+}
+
+/* ========== Muted Notice ========== */
+.muted-notice {
+  text-align: center;
+  font-size: 11px;
+  color: var(--gray-400);
+  padding: 2px 8px 6px;
+  font-style: italic;
+  max-width: 100%;
+}
+
+/* ========== Missed Messages Banner ========== */
+.missed-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--primary);
+  color: white;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(79,70,229,0.3);
+  animation: messageIn 0.3s ease;
+  transition: opacity 0.3s ease;
 }
 
 /* ========== Connection Status ========== */

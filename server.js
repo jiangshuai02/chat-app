@@ -273,6 +273,16 @@ app.post('/api/admin/users/:id/mute', authenticateToken, requireAdmin, async (re
     const { roomId, durationMinutes } = req.body;
     const mins = parseInt(durationMinutes) || 60;
     const mutedUntil = await db.muteUser(userId, roomId || null, req.user.id, mins);
+    // Emit mute notice to room if scope is current room
+    const mutedUser = await db.getUserById(userId);
+    if (roomId && mutedUser) {
+      io.to(`room:${roomId}`).emit('user:muted', {
+        userId,
+        username: mutedUser.username || 'Unknown',
+        display_name: mutedUser.display_name,
+        durationMinutes: mins
+      });
+    }
     res.json({ success: true, mutedUntil });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

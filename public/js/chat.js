@@ -16,6 +16,9 @@ const state = {
   pendingRoomPassword: null,
   friends: [],
   dnd: localStorage.getItem('dnd') === 'true',
+  missedCount: 0,
+  missedMessages: [],
+  notificationGranted: false,
 };
 
 let mobileBannerTimer = null;
@@ -144,7 +147,19 @@ function connectSocket() {
     const isOwn = message.user_id === state.user.id;
     if (message.room_id === state.currentRoom?.id) { appendMessage(message); scrollToBottom(); }
     updateRoomLastMessage(message.room_id, message);
-    if (!isOwn) { playMessageSound(); showMobileBanner(message); }
+    if (!isOwn) {
+      if (document.hidden) {
+        state.missedCount++;
+        state.missedMessages.push(message);
+        showNativeNotification(
+          message.display_name || message.username || '新消息',
+          message.type === 'image' ? '[图片]' : (message.content || '')
+        );
+      } else {
+        playMessageSound();
+        showMobileBanner(message);
+      }
+    }
   });
 
   state.socket.on('message:recalled', ({ messageId }) => {
@@ -230,7 +245,17 @@ function connectSocket() {
     if (state.friends.length > 0) {
       loadFriends();
     }
-    if (!isOwn) { playMessageSound(); showMobileBanner(message); }
+    if (!isOwn) {
+      if (document.hidden) {
+        state.missedCount++;
+        const senderName = message.sender_display_name || message.sender_username || message.display_name || message.username || '新消息';
+        state.missedMessages.push(message);
+        showNativeNotification(senderName, message.type === 'image' ? '[图片]' : (message.content || ''));
+      } else {
+        playMessageSound();
+        showMobileBanner(message);
+      }
+    }
   });
 
   state.socket.on('private:recalled', ({ messageId }) => {
@@ -256,6 +281,12 @@ function connectSocket() {
   state.socket.on('admin:message-blocked', (data) => {
     if (state.isAdmin) {
       showToast(`🚫 ${data.username} 的消息被屏蔽: "${data.keyword}"`, 'error');
+    }
+  });
+
+  state.socket.on('user:muted', (data) => {
+    if (state.currentRoom) {
+      appendMuteNotice(data.userId, data.durationMinutes);
     }
   });
 
@@ -445,6 +476,7 @@ function appendMessageToContainer(container, msg) {
   const div = document.createElement('div');
   div.className = `message${own?' own':''}${msg.is_recalled?' recalled':''}`;
   div.dataset.messageId = msg.id;
+  div.dataset.userId = msg.user_id;
   
   const canRecall = own || state.isAdmin;
   const recallBtn = canRecall ? `<button class="msg-recall-btn" onclick="recallMessage(${msg.id})" title="撤回">↩️</button>` : '';
@@ -463,7 +495,8 @@ function appendMessageToContainer(container, msg) {
     contentHtml = `<div class="message-bubble">${esc(msg.content)}</div>`;
   }
   
-  div.innerHTML = `<div class="message-avatar" style="background:${msg.avatar_color||'#4f46e5'}">${username.charAt(0).toUpperCase()}</div>
+  const avatarClickable = !own ? ' clickable' : '';
+  div.innerHTML = `<div class="message-avatar${avatarClickable}" style="background:${msg.avatar_color||'#4f46e5'}">${username.charAt(0).toUpperCase()}</div>
     <div class="message-body"><div class="message-header"><span class="message-username">${esc(username)}</span><span class="message-time">${time}</span>${recallBtn}</div>
     ${contentHtml}</div>`;
   container.appendChild(div);
@@ -1305,7 +1338,131 @@ document.getElementById('messagesList')?.addEventListener('scroll', function() {
   }
 });
 
-// ========== Friends ==========
+// ========== Avatar Click (Add Friend / Mute) ==========
+document.getElementById('messagesList')?.addEventListener('click', function(e) {
+  const avatar = e.target.closest('.message-avatar.clickable');
+  if (!avatar) return;
+  const msgDiv = avatar.closest('.message');
+  if (!msgDiv) return;
+  const userId = Number(msgDiv.dataset.userId);
+  const username = msgDiv.querySelector('.message-username')?.textContent || 'Unknown';
+  if (!userId || userId === state.user.id) return;
+  handleAvatarClick(userId, username);
+});
+
+function handleAvatarClick(userId, username) {
+  // Super admin: directly mute for 1 hour
+  if (state.isAdmin) {
+    if (!confirm(`确定要禁言 ${username} 1小时吗？`)) return;
+    muteUserFromAvatar(userId, username);
+    return;
+  }
+  // Check if already friends
+  const isFriend = state.friends.some(f => Number(f.id) === userId);
+  if (isFriend) {
+    showToast(`${username} 已是你的好友`, 'info');
+    return;
+  }
+  // Send friend request
+  sendFriendRequestFromAvatar(userId, username);
+}
+
+async function muteUserFromAvatar(userId, username) {
+  try {
+    const roomId = state.currentRoom?.id || null;
+    const res = await fetch(`${API}/api/admin/users/${userId}/mute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ roomId, durationMinutes: 60 })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    showToast(`已禁言 ${username} 1小时`, 'error');
+  } catch (e) { showToast('操作失败', 'error'); }
+}
+
+async function sendFriendRequestFromAvatar(userId, username) {
+  try {
+    const res = await fetch(`${API}/api/friends/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ friendId: userId })
+    });
+    if (!res.ok) { const d = await res.json(); showToast(d.error || '操作失败', 'error'); return; }
+    showToast(`好友申请已发送给 ${username}`, 'success');
+  } catch (e) { showToast('操作失败', 'error'); }
+}
+
+// ========== Duration Formatting ==========
+function formatDuration(minutes) {
+  const m = parseInt(minutes);
+  if (m < 60) return `${m}分钟`;
+  if (m === 60) return `1小时`;
+  if (m < 1440) return `${Math.floor(m/60)}小时`;
+  if (m === 1440) return `1天`;
+  if (m < 43200) return `${Math.floor(m/1440)}天`;
+  return `${Math.floor(m/43200)}个月`;
+}
+
+// ========== Mute Notice ==========
+function appendMuteNotice(userId, durationMinutes) {
+  if (!state.currentRoom) return;
+  const container = document.getElementById('messagesList');
+  // Find the last message from this user
+  const userMessages = container.querySelectorAll(`[data-user-id="${userId}"]`);
+  if (!userMessages.length) return;
+  const lastMsg = userMessages[userMessages.length - 1];
+  // Remove any existing mute notice for this user
+  const existing = container.querySelector(`.muted-notice[data-muted-user="${userId}"]`);
+  if (existing) existing.remove();
+  const notice = document.createElement('div');
+  notice.className = 'muted-notice';
+  notice.dataset.mutedUser = userId;
+  notice.textContent = `该用户因违反规定已被禁言 ${formatDuration(durationMinutes)}`;
+  lastMsg.parentNode.insertBefore(notice, lastMsg.nextSibling);
+}
+
+// ========== Background Notifications ==========
+function requestNotificationPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    Notification.requestPermission().then(perm => {
+      state.notificationGranted = perm === 'granted';
+    });
+  } else {
+    state.notificationGranted = Notification.permission === 'granted';
+  }
+}
+
+function showNativeNotification(title, body) {
+  if (!state.notificationGranted) return;
+  if (state.dnd) return;
+  try {
+    const notif = new Notification(title, { body, icon: '/favicon.ico' });
+    setTimeout(() => notif.close(), 5000);
+  } catch (e) { /* notification failed silently */ }
+}
+
+function showMissedMessagesBanner(count) {
+  if (count <= 0) return;
+  const existing = document.querySelector('.missed-banner');
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.className = 'missed-banner';
+  banner.textContent = `你有 ${count} 条新消息`;
+  banner.addEventListener('click', () => {
+    banner.remove();
+    scrollToBottom();
+  });
+  const container = document.getElementById('messagesContainer');
+  if (container) container.prepend(banner);
+  // Auto-dismiss after 5 seconds
+  setTimeout(() => {
+    if (banner.parentNode) {
+      banner.style.opacity = '0';
+      setTimeout(() => banner.remove(), 300);
+    }
+  }, 5000);
+}
 
 async function loadFriends() {
   try {
@@ -1663,6 +1820,7 @@ async function initPage() {
   await checkAdminStatus();
   setupAudioResume(); // Resume AudioContext on first user interaction (iOS fix)
   initDNDButton();
+  requestNotificationPermission(); // Request notification permission
   connectSocket();
   loadFriends();
   showActiveAnnouncements();
@@ -1706,6 +1864,13 @@ async function initPage() {
         reconnect();
       } else if (!state.socket) {
         connectSocket();
+      }
+      // Show missed messages notification
+      if (state.missedCount > 0) {
+        showMissedMessagesBanner(state.missedCount);
+        playMessageSound();
+        state.missedCount = 0;
+        state.missedMessages = [];
       }
     }
   });
