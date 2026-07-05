@@ -213,45 +213,6 @@ app.delete('/api/rooms/:id', authenticateToken, async (req, res) => {
 });
 
 // Friend Routes
-app.get('/api/friends', authenticateToken, async (req, res) => {
-  try { res.json({ friends: await db.getFriends(req.user.id) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/friends/requests', authenticateToken, async (req, res) => {
-  try { res.json({ requests: await db.getFriendRequests(req.user.id) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/friends/request', authenticateToken, async (req, res) => {
-  try {
-    const { friendId } = req.body;
-    if (!friendId) return res.status(400).json({ error: '请选择要添加的用户' });
-    const friend = await db.sendFriendRequest(req.user.id, parseInt(friendId));
-    res.json({ success: true, friend });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.post('/api/friends/requests/:id/accept', authenticateToken, async (req, res) => {
-  try {
-    const friend = await db.acceptFriendRequest(req.user.id, parseInt(req.params.id));
-    res.json({ success: true, friend });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.post('/api/friends/requests/:id/reject', authenticateToken, async (req, res) => {
-  try {
-    await db.rejectFriendRequest(req.user.id, parseInt(req.params.id));
-    res.json({ success: true });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.delete('/api/friends/:id', authenticateToken, async (req, res) => {
-  try {
-    await db.removeFriend(req.user.id, parseInt(req.params.id));
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 // ========== Admin Routes ==========
 
@@ -482,11 +443,12 @@ app.get('/api/friends/requests', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get friends list
+// Get friends list with online status
 app.get('/api/friends', authenticateToken, async (req, res) => {
   try {
     const friends = await db.getFriends(req.user.id);
-    res.json({ friends });
+    const enriched = friends.map(f => ({ ...f, online: onlineUsers.has(String(f.id)) }));
+    res.json({ friends: enriched });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -763,6 +725,21 @@ async function broadcastUserStatus(userId, online) {
   const userRooms = await db.getUserRooms(userId);
   for (const room of userRooms) {
     io.to(`room:${room.id}`).emit('user:status', { userId, username: user.username, online, last_seen: user.last_seen });
+  }
+
+  // Emit friend:status-changed to the user's friends for real-time friend list updates
+  try {
+    const friends = await db.getFriends(userId);
+    for (const friend of friends) {
+      io.to(`user:${friend.id}`).emit('friend:status-changed', {
+        userId: userId,
+        username: user.username,
+        online,
+        last_seen: user.last_seen
+      });
+    }
+  } catch (e) {
+    // silently fail - friend status notification is best-effort
   }
 }
 

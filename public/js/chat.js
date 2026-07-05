@@ -21,6 +21,62 @@ if (!state.token || !state.user.id) window.location.href = '/';
 
 const API = window.location.origin;
 
+// ========== Audio Context (iOS-friendly) ==========
+let audioCtx = null;
+let audioResumed = false;
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    audioCtx = new AudioCtx();
+  }
+  return audioCtx;
+}
+
+function resumeAudioContext() {
+  if (audioResumed) return;
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') {
+    ctx.resume().then(() => { audioResumed = true; }).catch(() => {});
+  } else if (ctx) {
+    audioResumed = true;
+  }
+}
+
+// Resume audio context on first user interaction
+function setupAudioResume() {
+  const handler = () => {
+    resumeAudioContext();
+    document.removeEventListener('click', handler);
+    document.removeEventListener('touchstart', handler);
+    document.removeEventListener('keydown', handler);
+  };
+  document.addEventListener('click', handler);
+  document.addEventListener('touchstart', handler);
+  document.addEventListener('keydown', handler);
+}
+
+function playMessageSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.15);
+  } catch (e) {}
+}
+
 // ========== Socket Connection ==========
 function connectSocket() {
   state.socket = io({
@@ -108,6 +164,22 @@ function connectSocket() {
 
   state.socket.on('friend:updated', () => {
     loadFriends();
+  });
+
+  state.socket.on('friend:status-changed', (data) => {
+    // Update a specific friend's online status in the rendered list without a full reload
+    const friend = state.friends.find(f => Number(f.id) === Number(data.userId));
+    if (friend) {
+      friend.online = data.online;
+      friend.last_seen = data.last_seen;
+      // Re-render the friends list
+      renderFriends(state.friends);
+      // If this friend is the current private chat partner, update the topbar status
+      if (state.currentFriend && Number(state.currentFriend.id) === Number(data.userId)) {
+        document.getElementById('currentRoomMeta').textContent = data.online ? '在线' : '离线';
+        state.currentFriend.online = data.online;
+      }
+    }
   });
 
   // ===== Private Message Events =====
@@ -262,6 +334,8 @@ async function switchRoom(roomId, password = '') {
   document.getElementById('currentRoomMeta').textContent = `${room.member_count||0} 位成员`;
   document.getElementById('membersBtn').style.display = 'inline-flex';
   document.getElementById('backToRoomBtn').style.display = 'none';
+  document.getElementById('mobileBackBtn').style.display = 'none';
+  document.getElementById('hamburgerBtn').style.display = '';
   const isRoomAdmin = room.is_room_admin || room.created_by === state.user.id;
   document.getElementById('deleteRoomBtn').style.display = (isRoomAdmin || state.isAdmin) ? 'inline-flex' : 'none';
   document.getElementById('emptyState').style.display = 'none';
@@ -514,6 +588,26 @@ function createRoom() {
   state.socket.emit('room:create', { name, description, password });
 }
 
+async function deleteCurrentRoom() {
+  if (!state.currentRoom) return;
+  if (!confirm(`确定要删除房间 "${state.currentRoom.name}" 吗？该操作不可恢复。`)) return;
+  try {
+    const res = await fetch(`${API}/api/rooms/${state.currentRoom.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${state.token}` } });
+    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
+    state.rooms = state.rooms.filter(r => r.id !== state.currentRoom.id);
+    state.currentRoom = null;
+    document.getElementById('currentRoomTitle').textContent = '选择一个房间';
+    document.getElementById('currentRoomMeta').textContent = '';
+    document.getElementById('membersBtn').style.display = 'none';
+    document.getElementById('deleteRoomBtn').style.display = 'none';
+    document.getElementById('messagesContainer').style.display = 'none';
+    document.getElementById('inputArea').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'flex';
+    renderRooms();
+    showToast('房间已删除', 'success');
+  } catch (e) { showToast('删除失败', 'error'); }
+}
+
 // ========== Room Password Modal ==========
 function closeRoomPasswordModal() {
   document.getElementById('roomPasswordModal').classList.remove('show');
@@ -574,50 +668,6 @@ function updateMembersDisplay(members) {
     document.getElementById('currentRoomMeta').textContent = `${on} 人在线 · ${members.length} 位成员`;
   }
 }
-function playMessageSound() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const oscillator = ctx.createOscillator();
-    const gain = ctx.createGain();
-    oscillator.connect(gain);
-    gain.connect(ctx.destination);
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(800, ctx.currentTime);
-    gain.gain.setValueAtTime(0.1, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-    oscillator.start();
-    oscillator.stop(ctx.currentTime + 0.15);
-  } catch (e) {}
-}
-
-async function deleteCurrentRoom() {
-  if (!state.currentRoom) return;
-  if (!confirm(`确定要删除房间 "${state.currentRoom.name}" 吗？该操作不可恢复。`)) return;
-  try {
-    const res = await fetch(`${API}/api/rooms/${state.currentRoom.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${state.token}` } });
-    if (!res.ok) { const d = await res.json(); showToast(d.error, 'error'); return; }
-    state.rooms = state.rooms.filter(r => r.id !== state.currentRoom.id);
-    state.currentRoom = null;
-    document.getElementById('currentRoomTitle').textContent = '选择一个房间';
-    document.getElementById('currentRoomMeta').textContent = '';
-    document.getElementById('membersBtn').style.display = 'none';
-    document.getElementById('deleteRoomBtn').style.display = 'none';
-    document.getElementById('messagesContainer').style.display = 'none';
-    document.getElementById('inputArea').style.display = 'none';
-    document.getElementById('emptyState').style.display = 'flex';
-    renderRooms();
-    showToast('房间已删除', 'success');
-  } catch (e) { showToast('删除失败', 'error'); }
-}
-
-function updateMembersDisplay(members) {
-  if (state.currentRoom) {
-    const on = members.filter(m=>m.online).length;
-    document.getElementById('currentRoomMeta').textContent = `${on} 人在线 · ${members.length} 位成员`;
-  }
-}
 function updateRoomOnlineCount() {}
 
 // ========== Helpers ==========
@@ -646,6 +696,8 @@ function showEmptyState() {
   document.getElementById('currentRoomMeta').textContent = '';
   document.getElementById('membersBtn').style.display = 'none';
   document.getElementById('backToRoomBtn').style.display = 'none';
+  document.getElementById('mobileBackBtn').style.display = 'none';
+  document.getElementById('hamburgerBtn').style.display = '';
 }
 
 function showToast(msg, type) {
@@ -1246,6 +1298,8 @@ function openPrivateChat(friendId) {
   document.getElementById('membersBtn').style.display = 'none';
   document.getElementById('deleteRoomBtn').style.display = 'none';
   document.getElementById('backToRoomBtn').style.display = 'flex';
+  document.getElementById('mobileBackBtn').style.display = '';
+  document.getElementById('hamburgerBtn').style.display = 'none';
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('messagesContainer').style.display = 'flex';
   document.getElementById('inputArea').style.display = 'flex';
@@ -1270,6 +1324,19 @@ function backToRoom() {
   showEmptyState();
   document.getElementById('backToRoomBtn').style.display = 'none';
   renderFriends(state.friends);
+}
+
+// Mobile back button handler: returns to sidebar/friends list from private chat
+function mobileBack() {
+  if (state.currentFriend) {
+    backToRoom();
+  }
+  // On mobile, open the sidebar so the user can select a room or friend
+  if (window.innerWidth <= 768) {
+    setTimeout(() => {
+      toggleSidebar();
+    }, 100);
+  }
 }
 
 async function loadPrivateMessages(friendId) {
@@ -1447,6 +1514,7 @@ async function initPage() {
     avatar.textContent = (state.user.display_name || state.user.username).charAt(0).toUpperCase();
   }
   await checkAdminStatus();
+  setupAudioResume(); // Resume AudioContext on first user interaction (iOS fix)
   connectSocket();
   loadFriends();
   showActiveAnnouncements();
